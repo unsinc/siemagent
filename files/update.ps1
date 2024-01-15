@@ -23,14 +23,15 @@ catch {
 $latestVersion = $response.tag_name
 
 # Compare $latestVersion to your current version and update if necessary
-Add-Type -AssemblyName System.Windows.Forms
+$tempPath = "C:\Widnows\Temp\UnsAgentUpdater.log"
+
 if ($latestVersion -eq "2024.01.15") {
 
-    Write-Output "No updates available" > $env:temp + "\unsupdater.log"
+    Write-Output "No updates available" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
 
 } else {
 
-    Write-Output "updates available. New version is $latestVersion" > $env:temp + "\unsupdater.log"
+    Write-Output "updates available. New version is $latestVersion" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
 
 }
 
