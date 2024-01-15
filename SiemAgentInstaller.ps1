@@ -59,7 +59,8 @@ param
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     # Relaunch the script with elevated privileges
     Write-Output "Rerun as administrator please."
-    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    Start-Sleep 5
+    exit
 }
 
 
@@ -136,9 +137,15 @@ $InstallDIR = $env:programfiles + '\UNS SIEM Agent'
 if (Test-Path $InstallDIR) {
     "Exist" | Out-Null
 } else {
-    New-Item -Path $InstallDIR -ItemType Directory
-    Write-Output "Setting up Install DIR to $($InstallDIR)" 
-    Write-Verbose -Message "$($timestamp) Default Installation Directory is: $InstallDIR"
+    try {
+        New-Item -Path $InstallDIR -ItemType Directory
+        Write-Output "Setting up Install DIR to $($InstallDIR)" 
+        Write-Verbose -Message "$($timestamp) Default Installation Directory is: $InstallDIR"
+    }
+    catch {
+        $errorMessage = $_.Exception
+        Write-Output "Creating folders failed because: $errorMessage"
+    }
 }
 
 # Remove leftovers from Elastic folder
@@ -215,7 +222,7 @@ function Invoke-SendSlack {
 # In case we want to download the files from google drive, below lines should be uncomment.
 # Add your links here in same order.
 $originalLinks = @(
-    "https://download.sysinternals.com/files/Sysmon.zip" ## UNS Sysmon File
+    "https://download.sysinternals.com/files/Sysmon.zip"  ## UNS Sysmon File
 	"https://raw.githubusercontent.com/unsinc/files/main/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
 	"https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.11.3-windows-x86_64.zip"   ## Elastic elastic-agent
     "https://raw.githubusercontent.com/unsinc/files/main/logo.ico"   ## UNS Logo ico
