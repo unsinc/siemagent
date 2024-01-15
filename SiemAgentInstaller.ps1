@@ -252,35 +252,53 @@ foreach ($i in 0..($agentPaths.Length - 1)) {
     Write-Verbose "Agent Path at Index $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
 }
 
- 
 
-# Function to download an image from the internet
+# Function to download files from the internet
 function Get-UNSFiles($downloadUrl, $installPath) {
-    try {
-        $webClient = New-Object System.Net.WebClient
-        $downloadTask = $webClient.DownloadFileTaskAsync($downloadUrl, $installPath)
-        $downloadTask.Wait()
-    }
-    catch {
-        $errorMessage = $_.Exception
-        Write-Verbose $errorMessage
+    $retryCount = 0
+    do {
+        try {
+            $webClient = New-Object System.Net.WebClient
+            $downloadTask = $webClient.DownloadFileTaskAsync($downloadUrl, $installPath)
+            $downloadTask.Wait()
+            $downloadSuccessful = $true
+        }
+        catch {
+            $errorMessage = $_.Exception
+            Write-Error "Failed to download files for following reasons: $errorMessage"
+            $downloadSuccessful = $false
+            $retryCount++
+        }
+    } while (-not $downloadSuccessful -and $retryCount -lt 3)
+
+    if (-not $downloadSuccessful) {
+        Write-Error "Failed to download files after 3 attempts"
         exit
     }
 }
+
 # Download files
-Write-Verbose "Downloading $($agentPaths[0])"
-Get-UNSFiles -downloadUrl $downloadUrls[0] -installPath $agentPaths[0]
-Write-Verbose "Downloading $($agentPaths[1])"
-Get-UNSFiles -downloadUrl $downloadUrls[1] -installPath $agentPaths[1]
-Write-Verbose "Downloading $($agentPaths[2])"
-Get-UNSFiles -downloadUrl $downloadUrls[2] -installPath $agentPaths[2]
-Write-Verbose "Downloading $($agentPaths[3])"
-Get-UNSFiles -downloadUrl $downloadUrls[3] -installPath $agentPaths[3]
-Write-Verbose "Downloading $($agentPaths[4])"
-Get-UNSFiles -downloadUrl $downloadUrls[4] -installPath $agentPaths[4]
+for ($i=0; $i -lt $downloadUrls.Length; $i++) {
+    Write-Verbose "Downloading $($agentPaths[$i])"
+    Get-UNSFiles -downloadUrl $downloadUrls[$i] -installPath $agentPaths[$i]
+}
+
+
+#Write-Verbose "Downloading $($agentPaths[0])"
+#Get-UNSFiles -downloadUrl $downloadUrls[0] -installPath $agentPaths[0]
+#Write-Verbose "Downloading $($agentPaths[1])"
+#Get-UNSFiles -downloadUrl $downloadUrls[1] -installPath $agentPaths[1]
+#Write-Verbose "Downloading $($agentPaths[2])"
+#Get-UNSFiles -downloadUrl $downloadUrls[2] -installPath $agentPaths[2]
+#Write-Verbose "Downloading $($agentPaths[3])"
+#Get-UNSFiles -downloadUrl $downloadUrls[3] -installPath $agentPaths[3]
+#Write-Verbose "Downloading $($agentPaths[4])"
+#Get-UNSFiles -downloadUrl $downloadUrls[4] -installPath $agentPaths[4]
+
 
 # Create necessary directories
 try {
+    <#
     if (Test-Path $InstallDIR\sysmon) {
         Write-Verbose "Sysmon directory exist"
     } else {
@@ -304,41 +322,67 @@ try {
         New-Item -Path $InstallDIR -Name "agent" -ItemType Directory -ErrorAction Stop 
         Write-Output "Agent folder created successfully."
         Write-Verbose -Message "$($timestamp) Config folder created  successfully."
+    } #>
+
+    $directories = @("sysmon", "configs", "agent")
+
+    foreach ($dir in $directories) {
+        $dirPath = Join-Path -Path $InstallDIR -ChildPath $dir
+        if (-not (Test-Path $dirPath)) {
+            New-Item -Path $dirPath -ItemType Directory -ErrorAction Stop
+            Write-Output "$dir folder created successfully." 
+            Write-Verbose -Message "$($timestamp) $dir folder created successfully."
+        } else {
+            Write-Verbose "$dir directory exists"
+        }
     }
+
 }
 catch {
     $errorMessage = $_.Exception.Message
-    "$($timestamp) Folder creation error message: $errorMessage."
+    Write-Error "$($timestamp) Folder creation error message: $errorMessage."
     exit
     #Invoke-SendSlack -errorMessage $errorMessage
 }
 
 # Copy required files to the installation directory
 function CopyFilesToDir {
-    try {
-        if (-not (Test-Path "$InstallDIR\sysmon\Sysmon.exe")) {
-            Expand-Archive -Path $logpath\Sysmon.zip -DestinationPath $InstallDIR\sysmon -ErrorAction Stop -Verbose
-            Start-Sleep -Milliseconds 500
+    $retryCount = 0
+    do {
+        try {
+            if (-not (Test-Path "$InstallDIR\sysmon\Sysmon.exe")) {
+                Expand-Archive -Path $logpath\Sysmon.zip -DestinationPath $InstallDIR\sysmon -ErrorAction Stop -Verbose
                 if (Test-Path "$InstallDIR\sysmon\Sysmon.exe") {
                     Write-Verbose "$($timestamp) Sysmon copied successfully."
                     Write-Verbose "$($timestamp) Sysmon64.exe copied successfully."
+                    $copySuccessful = $true
                 } else {
                     Write-Error "$($timestamp) Sysmon failed to copy to $($InstallDIR)"
-                    return CopyFilesToDir
+                    $copySuccessful = $false
+                    $retryCount++
                 }
-        } else {
-            Write-Verbose "Sysmon files already exist"
-        }
+            } else {
+                Write-Verbose "Sysmon files already exist"
+                $copySuccessful = $true
+            }
 
-        Copy-Item "$logpath\UNS-Sysmon.xml" -Destination "$InstallDIR\configs\" -ErrorAction Stop
-    }
-    catch {
-        Write-Verbose "Sysmon files copy failed"
-        $errorMessage = $_.Exception.Message
-        Write-Output "Error copying sysmon files because: $errorMessage"
+            Copy-Item "$logpath\UNS-Sysmon.xml" -Destination "$InstallDIR\configs\" -ErrorAction Stop
+        }
+        catch {
+            Write-Error "Sysmon files copy failed"
+            $errorMessage = $_.Exception.Message
+            Write-Error "Error copying sysmon files because: $errorMessage"
+            $copySuccessful = $false
+            $retryCount++
+        }
+    } while (-not $copySuccessful -and $retryCount -lt 3)
+
+    if (-not $copySuccessful) {
+        Write-Error "Failed to copy Sysmon files after 3 attempts"
         exit
     }
 }
+
 CopyFilesToDir
 
 
@@ -355,14 +399,13 @@ function Uninstall-Sysmon32 {
     try {
         $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon.exe" -ArgumentList "-u" -NoNewWindow -PassThru
         $process.WaitForExit()
-        Start-Sleep -Milliseconds 500
         Write-Output  "$($timestamp) Uninstall of Sysmon32 is complete" 
         Write-Verbose -Message "Uninstall of Sysmon32 is complete."
         Remove-Item -Path "$InstallDIR\sysmon\Sysmon.exe" -Force -ErrorAction SilentlyContinue
     }
     catch {
         $errorMessage = $_.Exception.Message
-        "$($timestamp) Error while uninstalling Sysmon32: $errorMessage"
+        Write-Error "$($timestamp) Error while uninstalling Sysmon32: $errorMessage"
         exit
         #Invoke-SendSlack -errorMessage $errorMessage
     }
@@ -378,7 +421,7 @@ function Uninstall-Perch {
                 $process.WaitForExit()
             } catch {
                 $errorMessage = $_.Exception.Message
-                "$($timestamp) Error while uninstalling Sysmon32: $errorMessage"
+                Write-Error "$($timestamp) Error while uninstalling Sysmon32: $errorMessage"
                 exit
             }
 }
@@ -390,13 +433,12 @@ function Install-Sysmon64 {
     try {
         $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon64.exe" -ArgumentList "-accepteula -i" -NoNewWindow -PassThru
         $process.WaitForExit()
-        Start-Sleep -Milliseconds 500
         Write-Output "$($timestamp) Installation of Sysmon64 is complete" 
         Write-Verbose -Message "Installation of Sysmon64 is complete"
     }
     catch {
         $errorMessage = $_.Exception.Message
-        "$($timestamp) Error while installing Sysmon64: $errorMessage"
+        Write-Error "$($timestamp) Error while installing Sysmon64: $errorMessage"
         #Invoke-SendSlack -errorMessage $errorMessage
     }
 }
@@ -410,19 +452,18 @@ function Set-Sysmon64 {
             Write-Output  "$($timestamp) Sysmon64 is running. Setting the configuration for Sysmon64." 
             $process = Start-Process -FilePath "$InstallDIR\sysmon\sysmon64.exe" -ArgumentList "-c `"$InstallDIR\configs\UNS-Sysmon.xml`"" -NoNewWindow -PassThru
             $process.WaitForExit()
-            Start-Sleep -Seconds 1
             Write-Output  "$($timestamp) Configuration of Sysmon64 is complete" 
             Write-Verbose -Message "$($timestamp) Configuration of Sysmon64 is complete"
         }
         catch {
             $errorMessage = $_.Exception.Message
-            "$($timestamp) Error while setting Sysmon64 config: $errorMessage"
+            Write-Error "$($timestamp) Error while setting Sysmon64 config: $errorMessage"
             #Invoke-SendSlack -errorMessage $errorMessage
         }
     } else {
-        Write-Output "$($timestamp) Sysmon64 was not found on the system" 
+        Write-Error "$($timestamp) Sysmon64 was not found on the system" 
         Write-Verbose -Message "$($timestamp) Sysmon64 was not found on the system"
-        return Install-Sysmon64
+        exit
     }
 }
 
@@ -746,15 +787,18 @@ try {
         $taskName = "UNS Update Task"
         $taskDescription = "This task checks a private GitHub repository for updates"
         $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command {Invoke-Expresson(Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/siemagent/testing/files/task.ps1`" -Headers @`{`"Authorization`" = `"token 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`"`})}"
-        $taskTrigger1 = New-ScheduledTaskTrigger -Daily -At 9am
-        $taskTrigger2 = New-ScheduledTaskTrigger -Daily -At 9pm
-    
+        
+        # Define the trigger to run the task every 5 minutes
+        $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+        #$taskTrigger1 = New-ScheduledTaskTrigger -Daily -At 9am
+        #$taskTrigger2 = New-ScheduledTaskTrigger -Daily -At 9pm
+
         # Define the principal to run the task with system privileges
         $taskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     
         try {
            # Register the task
-            Register-ScheduledTask -Action $taskAction -Trigger $taskTrigger1, $taskTrigger2 -TaskName $taskName -Description $taskDescription -Principal $taskPrincipal 
+            Register-ScheduledTask -Action $taskAction -Trigger $taskTrigger -TaskName $taskName -Description $taskDescription -Principal $taskPrincipal 
             Start-Sleep -Seconds 1
             if (Get-ScheduledTask -TaskName $taskName) {
                 Write-Verbose "UNS Update Task creation successful"
@@ -762,7 +806,7 @@ try {
         }
         catch {
             $errorMessage = $_.Exception
-            Write-Output "$($timestamp) UNS Agent Update Task creation failed because of $($errorMessage)"
+            Write-Error "$($timestamp) UNS Agent Update Task creation failed because of $($errorMessage)"
             break
         }
     }
@@ -770,7 +814,7 @@ try {
 }
 catch {
     $errorMessage = $_.Exception
-    Write-Output "$($timestamp) UNS ElasticSIEM Agent deployment failed because of $($errorMessage)"
+    Write-Error "$($timestamp) UNS ElasticSIEM Agent deployment failed because of $($errorMessage)"
     break
 }
 finally {
