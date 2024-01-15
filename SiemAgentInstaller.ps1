@@ -157,30 +157,12 @@ function Remove-ElasticLeftovers {
 		foreach ($item in $items) {
 			if (Test-Path $item -PathType Leaf) {
                 Write-Debug "Removing $item."
-				Remove-Item -Path $item -Recurse -Force -ErrorAction SilentlyContinue -
+				Remove-Item -Path $item -Recurse -Force -ErrorAction SilentlyContinue
 			} else { Write-Output "" }
 		}
         Write-Verbose "Leftovers removed"
     } else {
     }
-}
-
-# Execute function if Ctrl+C is passed on the console.
-function OnCtrlC {
-    Write-Output "Ctrl+C was pressed. Executing Remove-Leftovers"
-    Remove-ElasticLeftovers -path $logpath
-    Write-Verbose -Message "Going back to initial location: $($InitialLocation)" 
-    Push-Location -LiteralPath $InitialLocation
-    Stop-Transcript
-    Start-Sleep -Milliseconds 500
-    Remove-ElasticLeftovers -path $logpath
-    Write-Verbose "All temp files were removed."
-}
-
-# trap statement to handle Ctrl+C
-trap {
-    OnCtrlC
-    break
 }
 
 # Current execution directory (useful to remove leftovers after deployment)
@@ -634,7 +616,6 @@ function Install-ElasticAgent {
                         Write-Verbose "$($timestamp): Token is empty. Seems that the user cancelled the input"
                         Write-Output "User cancelled the input"
                         exit
-
                     } else {
 
                         Write-Verbose "Tokens are provided, deployment can continue"
