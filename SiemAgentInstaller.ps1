@@ -763,6 +763,7 @@ try {
         catch {
             $errorMessage = $_.Exception
             Write-Output "$($timestamp) UNS Agent Update Task creation failed because of $($errorMessage)"
+            break
         }
     }
 
@@ -770,13 +771,15 @@ try {
 catch {
     $errorMessage = $_.Exception
     Write-Output "$($timestamp) UNS ElasticSIEM Agent deployment failed because of $($errorMessage)"
+    break
 }
 finally {
     Remove-ElasticLeftovers -path $logpath
     Write-Verbose -Message "Going back to initial location: $($InitialLocation)" 
     Push-Location -LiteralPath $InitialLocation
     Stop-Transcript -ErrorAction SilentlyContinue
-    Remove-Item -Recurse $logpath
+    Start-Sleep -Seconds 2
+    Remove-Item -Recurse $logpath -ErrorAction SilentlyContinue -Exclude "*.log"
     Write-Verbose "All temp files were removed."
 }
 ### END ACTIN ###
