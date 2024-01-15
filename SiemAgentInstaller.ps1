@@ -715,7 +715,7 @@ try {
         # Task description
         $taskDescription = "This task checks a private GitHub repository for updates"
         # Task action
-        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle hidden -Command {Invoke-Expression(Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/siemagent/testing/files/task.ps1`" -Headers @`{`"Authorization`" = `"token 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`"`})} 2> `"C:\Windows\Temp\error.txt`""
+        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle hidden -Command {Invoke-Expression(Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/files/main/task.ps1`" -UseBasicParsing)} 2> `"C:\Windows\Temp\error.txt`""
         
         # Define the trigger to run the task every 5 minutes
         $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
