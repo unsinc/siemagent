@@ -33,6 +33,7 @@ Use this switch to direct the log/data output to the specified directory.
 Use this switch to provide slack URI
 Example: .\elastic_installer.ps1 -SlackURI https://hooks.slack.com/services/T3BMPT6C1/B14TEQDBz52/VJDw5aGVlVvJeXdtLvgBxWGL 
 
+#test line
 
 #>
 [CmdletBinding()]
@@ -58,7 +59,8 @@ param
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     # Relaunch the script with elevated privileges
     Write-Output "Rerun as administrator please."
-    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs
+    Start-Sleep 5
+    exit
 }
 
 
@@ -135,9 +137,15 @@ $InstallDIR = $env:programfiles + '\UNS SIEM Agent'
 if (Test-Path $InstallDIR) {
     "Exist" | Out-Null
 } else {
-    New-Item -Path $InstallDIR -ItemType Directory
-    Write-Output "Setting up Install DIR to $($InstallDIR)" 
-    Write-Verbose -Message "$($timestamp) Default Installation Directory is: $InstallDIR"
+    try {
+        New-Item -Path $InstallDIR -ItemType Directory
+        Write-Output "Setting up Install DIR to $($InstallDIR)" 
+        Write-Verbose -Message "$($timestamp) Default Installation Directory is: $InstallDIR"
+    }
+    catch {
+        $errorMessage = $_.Exception
+        Write-Output "Creating folders failed because: $errorMessage"
+    }
 }
 
 # Remove leftovers from Elastic folder
@@ -214,11 +222,11 @@ function Invoke-SendSlack {
 # In case we want to download the files from google drive, below lines should be uncomment.
 # Add your links here in same order.
 $originalLinks = @(
-    "https://download.sysinternals.com/files/Sysmon.zip"   ## UNS Sysmon File
-	"https://raw.githubusercontent.com/toteb/files/main/PowerShellMC/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
+    "https://download.sysinternals.com/files/Sysmon.zip"  ## UNS Sysmon File
+	"https://raw.githubusercontent.com/unsinc/files/main/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
 	"https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.11.3-windows-x86_64.zip"   ## Elastic elastic-agent
-    "https://raw.githubusercontent.com/toteb/files/main/PowerShellMC/logo.ico"   ## UNS Logo ico
-    "https://raw.githubusercontent.com/toteb/files/main/PowerShellMC/logo.png"   ## UNS Logo
+    "https://raw.githubusercontent.com/unsinc/files/main/logo.ico"   ## UNS Logo ico
+    "https://raw.githubusercontent.com/unsinc/files/main/logo.png"   ## UNS Logo
 )
 
 # Function to modify google drive share links into downloadable format.
@@ -751,6 +759,29 @@ try {
         Write-Output "Something went wrong"
     }
 
+    Write-Verbose "Setting update task..."
+    # Define the task properties
+    $taskName = "UNS Update Task"
+    $taskDescription = "This task checks a private GitHub repository for updates"
+    $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command {iex (Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/unsagent/testing/files/task.ps1`" -Headers @`{`"Authorization`" = `"token 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`"`})}"
+    $taskTrigger1 = New-ScheduledTaskTrigger -Daily -At 9am
+    $taskTrigger2 = New-ScheduledTaskTrigger -Daily -At 9pm
+
+    # Define the principal to run the task with system privileges
+    $taskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+    try {
+       # Register the task
+        Register-ScheduledTask -Action $taskAction -Trigger $taskTrigger1, $taskTrigger2 -TaskName $taskName -Description $taskDescription -Principal $taskPrincipal 
+        Start-Sleep -Seconds 1
+        if (Get-ScheduledTask -TaskName $taskName) {
+            Write-Verbose "UNS Update Task creation successful"
+        }
+    }
+    catch {
+        $errorMessage = $_.Exception
+        Write-Output "$($timestamp) UNS Agent Update Task creation failed because of $($errorMessage)"
+    }
 }
 catch {
     $errorMessage = $_.Exception
@@ -761,6 +792,7 @@ finally {
     Write-Verbose -Message "Going back to initial location: $($InitialLocation)" 
     Push-Location -LiteralPath $InitialLocation
     Stop-Transcript -ErrorAction SilentlyContinue
+    Remove-Item -Recurse $logpath
     Write-Verbose "All temp files were removed."
 }
 ### END ACTIN ###
