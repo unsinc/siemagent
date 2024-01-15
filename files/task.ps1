@@ -3,6 +3,19 @@ $user = "unsinc"
 $repo = "siemagent"
 $tempPath = "C:\Windows\Temp\UnsAgentUpdater.log"
 
+# Timestamp function
+function Get-FormattedTimestamp {
+    Get-Date -Format "yyyyMMdd_HHmmss"
+    #Possible formats are:
+    # "yyyyMMdd_HHmmss"
+    # "dddd MM/dd/yyyy HH:mm K"
+    # -UFormat "%A %m/%d/%Y %R %Z"
+    # For more information see Get-Date - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/get-date?view=powershell-7.4
+}
+
+$timestamp = Get-FormattedTimestamp
+Write-Verbose -Message "Timestamp is: $timestamp" 
+
 try {
     # Call the GitHub API
     $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$user/$repo/releases/latest" -UseBasicParsing
