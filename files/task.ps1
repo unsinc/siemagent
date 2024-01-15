@@ -1,17 +1,8 @@
-function Get-FormattedTimestamp {
-    Get-Date -Format "yyyyMMdd_HHmmss"
-    #Possible formats are:
-    # "yyyyMMdd_HHmmss"
-    # "dddd MM/dd/yyyy HH:mm K"
-    # -UFormat "%A %m/%d/%Y %R %Z"
-    # For more information see Get-Date - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/get-date?view=powershell-7.4
-}
-$timestamp = Get-FormattedTimestamp
-
 # Define the repository
 $user = "unsinc"
 $repo = "siemagent"
 $token = "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"
+$tempPath = "C:\Windows\Temp\UnsAgentUpdater.log"
 
 # Create a header with your token
 $headers = @{
@@ -24,32 +15,37 @@ try {
 }
 catch {
     $errorMessage = $_.Exception
-    Write-Output "Unable to get response from the server for following reasons: $errorMessage"
+    Write-Output "Unable to get response from the server for following reasons: $errorMessage" | OutFi;e -FilePath $tempPath -Append -ErrorAction SilentlyContinue
 }
+
 # Check the tag_name property for the latest release version
 $latestVersion = $response.tag_name
 
 # Compare $latestVersion to your current version and update if necessary
-$tempPath = "C:\Windows\Temp\UnsAgentUpdater.log"
+$messages = @()
 
-    if ($latestVersion -eq "2024.01.15") {
+if ($latestVersion -eq "2024.01.15") {
+    $messages += "$timestamp : No updates available"
+} elseif ($latestVersion -gt "2024.01.15") {
+    $messages += "$timestamp : Updates available. New version is $latestVersion"
+    try {
+        # Download the script
+        $scriptPath = Join-Path $env:TEMP "update.ps1"
+        Invoke-RestMethod -Uri "https://raw.githubusercontent.com/unsinc/siemagent/testing/files/update.ps1" -Headers $headers -OutFile $scriptPath
 
-        Write-Output "$imestamp : No updates available" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
-
-    } elseif ($latestVersion -gt "2024.01.15") {
-
-        Write-Output "$timestamp : Updates available. New version is $latestVersion" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
-        try {
-            Invoke-Expression(Invoke-RestMethod -Uri "https://raw.githubusercontent.com/unsinc/siemagent/testing/files/update.ps1" -Headers $headers)
-        }
-        catch {
-            $errorMessage = $_.Exception
-            Write-Output "$errorMessage" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
-            Start-Sleep 3
-            exit
-        }
+        # Execute the script
+        & $scriptPath
     }
-    else {
-       Write-Output "Version is below currently installed agent version or just empty. Exiting ..." | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
-       exit
+    catch {
+        $errorMessage = $_.Exception
+        $messages += "$errorMessage"
+        Start-Sleep 3
+        exit
     }
+} else {
+    $messages += "Version is below currently installed agent version or just empty. Exiting ..."
+    exit
+}
+
+# Write all messages to the log file
+$messages | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
