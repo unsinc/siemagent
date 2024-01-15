@@ -32,24 +32,22 @@ $latestVersion = $response.tag_name
 # Compare $latestVersion to your current version and update if necessary
 $tempPath = "C:\Windows\Temp\UnsAgentUpdater.log"
 
-    if ($latestVersion -eq "2024.01.15") {
+if ($latestVersion -eq "2024.01.15") {
 
-        Write-Output "$imestamp : No updates available" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
+Write-Output "$timestamp : No updates available" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
 
-    } elseif ($latestVersion -gt "2024.01.15") {
+} elseif ($latestVersion -gt "2024.01.15") {
 
-        Write-Output "$timestamp : Updates available. New version is $latestVersion" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
-        try {
-            Invoke-Expression(Invoke-RestMethod -Uri "https://raw.githubusercontent.com/unsinc/siemagent/testing/files/update.ps1" -Headers $headers)
+Write-Output "$timestamp : Updates available. New version is $latestVersion" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
+    try {
+        Invoke-Expression(Invoke-RestMethod -Uri "https://raw.githubusercontent.com/unsinc/siemagent/testing/files/update.ps1" -Headers $headers)
+    } catch {
+        $errorMessage = $_.Exception
+        Write-Output "$errorMessage" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
+        Start-Sleep 3
+        exit
         }
-        catch {
-            $errorMessage = $_.Exception
-            Write-Output "$errorMessage" | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
-            Start-Sleep 3
-            exit
-        }
-    }
-    else {
+    } else {
        Write-Output "Version is below currently installed agent version or just empty. Exiting ..." | Out-File -FilePath $tempPath -Append -ErrorAction SilentlyContinue
        exit
     }
