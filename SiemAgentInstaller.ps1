@@ -752,6 +752,28 @@ try {
         Write-Output "Something went wrong"
     }
 
+    Write-Verbose "Setting update task..."
+    # Define the task properties
+    $taskName = "UNS Update Task"
+    $taskDescription = "This task checks a private GitHub repository for updates"
+    $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command {iex (Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/unsagent/testing/files/task.ps1`" -Headers @`{`"Authorization`" = `"token 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`"`})}"
+    $taskTrigger = New-ScheduledTaskTrigger -Daily -At 9am
+
+    # Define the principal to run the task with system privileges
+    $taskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+    try {
+       # Register the task
+        Register-ScheduledTask -Action $taskAction -Trigger $taskTrigger -TaskName $taskName -Description $taskDescription -Principal $taskPrincipal 
+        Start-Sleep -Seconds 1
+        if (Get-ScheduledTask -TaskName $taskName) {
+            Write-Verbose "UNS Update Task creation successful"
+        }
+    }
+    catch {
+        $errorMessage = $_.Exception
+        Write-Output "$($timestamp) UNS Agent Update Task creation failed because of $($errorMessage)"
+    }
 }
 catch {
     $errorMessage = $_.Exception
@@ -762,6 +784,7 @@ finally {
     Write-Verbose -Message "Going back to initial location: $($InitialLocation)" 
     Push-Location -LiteralPath $InitialLocation
     Stop-Transcript -ErrorAction SilentlyContinue
+    Remove-Item -Recurse $logpath
     Write-Verbose "All temp files were removed."
 }
 ### END ACTIN ###

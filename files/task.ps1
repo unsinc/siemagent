@@ -23,7 +23,7 @@ catch {
 $latestVersion = $response.tag_name
 
 # Compare $latestVersion to your current version and update if necessary
-$tempPath = "C:\Widnows\Temp\UnsAgentUpdater.log"
+$tempPath = "C:\Windows\Temp\UnsAgentUpdater.log"
 
 if ($latestVersion -eq "2024.01.15") {
 
