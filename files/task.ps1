@@ -9,7 +9,7 @@ try {
 }
 catch {
     $errorMessage = $_.Exception
-    Write-Output "Unable to get response from the server for following reasons: $errorMessage" | OutFi;e -FilePath $tempPath -Append -ErrorAction SilentlyContinue
+    Write-Output "Unable to get response from the server for following reasons: $errorMessage" | OutFile -FilePath $tempPath -Append -ErrorAction SilentlyContinue
 }
 # Check the tag_name property for the latest release version
 $latestVersion = $response.tag_name
