@@ -1,4 +1,4 @@
-# Define the repository and your personal access token
+# Define the repository
 $user = "unsinc"
 $repo = "unsagent"
 $token = "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"
@@ -6,7 +6,6 @@ $token = "github_pat_11BFLF3DQ05RN588hI0Tjz_zd35CFY50HSuSpUR6fvYM6Y4pqdgVkSKvw5C
 # Create a header with your token
 $headers = @{
     "Authorization" = "token $token"
-
 }
 
 try {
@@ -17,8 +16,6 @@ catch {
     $errorMessage = $_.Exception
     Write-Output $errorMessage
 }
-
-
 # Check the tag_name property for the latest release version
 $latestVersion = $response.tag_name
 
