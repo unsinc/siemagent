@@ -414,9 +414,6 @@ function Wait-Service {
 
 # Function to popup token form
 function Show-TokenForm {
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-
     # Create a form
     $form = New-Object Windows.Forms.Form
     $form.Text = 'UNS Elastic'
@@ -568,25 +565,29 @@ function Install-ElasticAgent {
                     Write-Verbose "Fleet URL is already provided: $fleetURL"
                     Write-Verbose "Missing token. Initiating form input."
                     $token = Show-TokenForm
+                    if (($null -eq $token) -or ($token.Length -lt 30)) {
+                        Write-Error "$($timestamp): Token is empty or too short. Seems that the user cancelled the input or did not provided required value" -ErrorAction Stop
+                        exit
+                    }
                 } elseif (($token) -and (-not $fleetURL)) {
                     Write-Verbose "Token is already provided: $token"
                     Write-Verbose "Missing FleetURL. Initiating form input."
                     $fleetURL = Show-TokenForm
+                    if (($null -eq $fleetURL) -or ($fleetURL.Length -lt 30)) {
+                        Write-Error "$($timestamp): fleetURL is empty or too short. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
+                        exit
+                    }
                     Write-Verbose "FleetURL provided: $fleetURL"
+
                 } else {
                     $tokenVars = Show-TokenForm
                     $token = $tokenVars[0]
                     $fleetURL = $tokenVars[1]
-                }
-
-                # final token verification.
-                if (($null -eq $token -or $token.Length -lt 30) -or ($null -eq $fleetURL -or $fleetURL.Length -lt 30)) {
-                    Write-Verbose "Token provided: $token"
-                    Write-Verbose "FleetURL provided: $fleetURL"
-                    Write-Error "$($timestamp): Token or fleetURL is empty or too short. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
-                    exit
-                } else {
-                    Write-Verbose "Tokens are provided, deployment can continue"
+                    if (($null -ne $token) -or ($null -ne $fleetURL)) {
+                        Write-Verbose "Tokens were provided"
+                    } else {
+                        Write-Error "$($timestamp): fleetURL or token is empty. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
+                    }
                 }
 
          	$arguments = "install -f"
