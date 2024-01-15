@@ -581,7 +581,7 @@ function Install-ElasticAgent {
 
                 # final token verification.
                 if (($token.Length -lt 10) -or ($fleetURL.Length -lt 10)) {
-                     Write-Error "$($timestamp): Token or fleetURL is empty. Seems that the user cancelled the input" -ErrorAction Stop
+                     Write-Error "$($timestamp): Token or fleetURL is empty. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
                      exit
                 } else {
                     Write-Verbose "Tokens are provided, deployment can continue"
