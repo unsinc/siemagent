@@ -157,7 +157,7 @@ function Remove-ElasticLeftovers {
 		foreach ($item in $items) {
 			if (Test-Path $item -PathType Leaf) {
                 Write-Debug "Removing $item."
-				Remove-Item -Path $item -Recurse -Force -ErrorAction SilentlyContinue
+				Remove-Item -Path $item -Recurse -Force -ErrorAction SilentlyContinue -
 			} else { Write-Output "" }
 		}
         Write-Verbose "Leftovers removed"
@@ -630,18 +630,13 @@ function Install-ElasticAgent {
                 Write-Verbose "Token provided is: $token"
                 Write-Verbose "FleetURL provided is: $fleetURL"
 
-                    if ($null -eq $token) {
+                    if (($null -eq $token) -or ($null -eq $fleetURL)) {
                         Write-Verbose "$($timestamp): Token is empty. Seems that the user cancelled the input"
                         Write-Output "User cancelled the input"
                         exit
 
-                    }
-                    elseif ($null -eq $fleetURL) {
-                        Write-Verbose "$($timestamp): FleetURL is empty. Seems that the user cancelled the input or did not provided a value"
-                        Write-Output "User cancelled the input"
-                        exit
-
                     } else {
+
                         Write-Verbose "Tokens are provided, deployment can continue"
                     }
             
@@ -658,7 +653,7 @@ function Install-ElasticAgent {
             if ($null -eq $token) {
                 Write-Verbose "Token issues after token forms"
                 Remove-ElasticLeftovers -path $InstallDIR\agent
-                break
+                exit
 
             } else {
                 # installing elastic services
@@ -675,40 +670,44 @@ function Install-ElasticAgent {
                     $errorMessage = $_.Exception
                     Write-Output "$($timestamp) Installation failed because of $($errorMessage)"
                     Remove-ElasticLeftovers -path $InstallDIR\agent
+                    exit
                 }
 
                 #modifying services
-                try {
-                    #Delete and recreate service:
-                    Write-Verbose "Services operations began:"
-                    Start-Sleep -Milliseconds 500
-                    Write-Verbose "Stopping elastic agent service"
-                    Stop-Service -Name "Elastic Agent" -ErrorAction Stop
-                    Start-Sleep -Milliseconds 500
-                    Write-Verbose "Renaming elastic agent to UNSAgent.exe"
-                    Rename-Item -Path "$InstallDIR\agent\elastic-agent.exe" -NewName "UNSAgent.exe" -ErrorAction Stop
-                    Start-Sleep -Milliseconds 500
-                    Write-Verbose "Deleting Elastic Agent service"
-                    sc.exe delete "Elastic Agent" -ErrorAction Stop
-                    Start-Sleep -Milliseconds 500
-                    Write-Verbose "Creating UNSAgent service with $InstallDIR\agent\UNSAgent.exe service path"
-                    sc.exe create "UNSAgent" binPath= "$InstallDIR\agent\UNSAgent.exe" start= "auto" DisplayName= "UNS SIEM Agent"
-                    Start-Sleep -Milliseconds 500
-                    Write-Verbose "Setting UNSAgent service description."
-                    sc.exe description "UNSAgent" "UNS SIEM Agent is elastic-based unified agent to observe, monitor and protect your system."
-                    Start-Sleep -Milliseconds 500
-                    Write-Verbose "Attempting to start new service"
-                    Start-Service -Name "UNSAgent"
-                    Wait-Service -serviceName "UNSAgent" -status "Running"
-                    if ((Get-Service "UNSAgent").Status -eq "Running") {
-                        Write-Verbose "'UNSAgent' service, successfully started."
+                if (Get-Service -Name "Elastic Agent") {
+                    try {
+                        #Delete and recreate service:
+                        Write-Verbose "Services operations began:"
+                        Start-Sleep -Milliseconds 500
+                        Write-Verbose "Stopping elastic agent service"
+                        Stop-Service -Name "Elastic Agent" -ErrorAction Stop
+                        Start-Sleep -Milliseconds 500
+                        Write-Verbose "Renaming elastic agent to UNSAgent.exe"
+                        Rename-Item -Path "$InstallDIR\agent\elastic-agent.exe" -NewName "UNSAgent.exe" -ErrorAction Stop
+                        Start-Sleep -Milliseconds 500
+                        Write-Verbose "Deleting Elastic Agent service"
+                        sc.exe delete "Elastic Agent" -ErrorAction Stop
+                        Start-Sleep -Milliseconds 500
+                        Write-Verbose "Creating UNSAgent service with $InstallDIR\agent\UNSAgent.exe service path"
+                        sc.exe create "UNSAgent" binPath= "$InstallDIR\agent\UNSAgent.exe" start= "auto" DisplayName= "UNS SIEM Agent"
+                        Start-Sleep -Milliseconds 500
+                        Write-Verbose "Setting UNSAgent service description."
+                        sc.exe description "UNSAgent" "UNS SIEM Agent is elastic-based unified agent to observe, monitor and protect your system."
+                        Start-Sleep -Milliseconds 500
+                        Write-Verbose "Attempting to start new service"
+                        Start-Service -Name "UNSAgent"
+                        Wait-Service -serviceName "UNSAgent" -status "Running"
+                        if ((Get-Service "UNSAgent").Status -eq "Running") {
+                            Write-Verbose "'UNSAgent' service, successfully started."
+                        }
+    
                     }
-
-                }
-                catch {
-                    $errorMessage = $_.Exception
-                    Write-Output "$($timestamp) Modifying services failed because of $($errorMessage)"
-                    Remove-ElasticLeftovers -path $InstallDIR\agent
+                    catch {
+                        $errorMessage = $_.Exception
+                        Write-Output "$($timestamp) Modifying services failed because of $($errorMessage)"
+                        Remove-ElasticLeftovers -path $InstallDIR\agent
+                        Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
+                    }
                 }
             }
         } 
@@ -716,6 +715,8 @@ function Install-ElasticAgent {
                 $errorMessage = $_.Exception
                 Write-Output "$($timestamp) UNS ElasticSIEM Agent deployment failed because of $($errorMessage)"
                 Remove-ElasticLeftovers -path $InstallDIR\agent
+                Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
+                break
         }
 }
 
@@ -757,29 +758,33 @@ try {
         Write-Output "Something went wrong"
     }
 
-    Write-Verbose "Setting update task..."
-    # Define the task properties
-    $taskName = "UNS Update Task"
-    $taskDescription = "This task checks a private GitHub repository for updates"
-    $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command {iex (Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/unsagent/testing/files/task.ps1`" -Headers @`{`"Authorization`" = `"token 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`"`})}"
-    $taskTrigger1 = New-ScheduledTaskTrigger -Daily -At 9am
-    $taskTrigger2 = New-ScheduledTaskTrigger -Daily -At 9pm
+    if (Get-Service -Name "UNSAgent") {
 
-    # Define the principal to run the task with system privileges
-    $taskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-
-    try {
-       # Register the task
-        Register-ScheduledTask -Action $taskAction -Trigger $taskTrigger1, $taskTrigger2 -TaskName $taskName -Description $taskDescription -Principal $taskPrincipal 
-        Start-Sleep -Seconds 1
-        if (Get-ScheduledTask -TaskName $taskName) {
-            Write-Verbose "UNS Update Task creation successful"
+        Write-Verbose "Setting update task..."
+        # Define the task properties
+        $taskName = "UNS Update Task"
+        $taskDescription = "This task checks a private GitHub repository for updates"
+        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command {iex (Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/unsagent/testing/files/task.ps1`" -Headers @`{`"Authorization`" = `"token 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`"`})}"
+        $taskTrigger1 = New-ScheduledTaskTrigger -Daily -At 9am
+        $taskTrigger2 = New-ScheduledTaskTrigger -Daily -At 9pm
+    
+        # Define the principal to run the task with system privileges
+        $taskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    
+        try {
+           # Register the task
+            Register-ScheduledTask -Action $taskAction -Trigger $taskTrigger1, $taskTrigger2 -TaskName $taskName -Description $taskDescription -Principal $taskPrincipal 
+            Start-Sleep -Seconds 1
+            if (Get-ScheduledTask -TaskName $taskName) {
+                Write-Verbose "UNS Update Task creation successful"
+            }
+        }
+        catch {
+            $errorMessage = $_.Exception
+            Write-Output "$($timestamp) UNS Agent Update Task creation failed because of $($errorMessage)"
         }
     }
-    catch {
-        $errorMessage = $_.Exception
-        Write-Output "$($timestamp) UNS Agent Update Task creation failed because of $($errorMessage)"
-    }
+
 }
 catch {
     $errorMessage = $_.Exception
