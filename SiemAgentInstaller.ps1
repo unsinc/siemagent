@@ -215,11 +215,11 @@ function Invoke-SendSlack {
 # In case we want to download the files from google drive, below lines should be uncomment.
 # Add your links here in same order.
 $originalLinks = @(
-    "https://download.sysinternals.com/files/Sysmon.zip"   ## UNS Sysmon File
-	"https://raw.githubusercontent.com/toteb/files/main/PowerShellMC/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
+    "https://download.sysinternals.com/files/Sysmon.zip" ## UNS Sysmon File
+	"https://raw.githubusercontent.com/unsinc/files/main/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
 	"https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.11.3-windows-x86_64.zip"   ## Elastic elastic-agent
-    "https://raw.githubusercontent.com/toteb/files/main/PowerShellMC/logo.ico"   ## UNS Logo ico
-    "https://raw.githubusercontent.com/toteb/files/main/PowerShellMC/logo.png"   ## UNS Logo
+    "https://raw.githubusercontent.com/unsinc/files/main/logo.ico"   ## UNS Logo ico
+    "https://raw.githubusercontent.com/unsinc/files/main/logo.png"   ## UNS Logo
 )
 
 # Function to modify google drive share links into downloadable format.
