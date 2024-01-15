@@ -3,11 +3,6 @@ $user = "unsinc"
 $repo = "siemagent"
 $tempPath = "C:\Windows\Temp\UnsAgentUpdater.log"
 
-# Create a header with your token
-$headers = @{
-    "Authorization" = "token $token"
-}
-
 try {
     # Call the GitHub API
     $response = Invoke-RestMethod -Uri "https://api.github.com/repos/$user/$repo/releases/latest" -UseBasicParsing
