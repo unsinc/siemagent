@@ -33,8 +33,6 @@ Use this switch to direct the log/data output to the specified directory.
 Use this switch to provide slack URI
 Example: .\elastic_installer.ps1 -SlackURI https://hooks.slack.com/services/T3BMPT6C1/B14TEQDBz52/VJDw5aGVlVvJeXdtLvgBxWGL 
 
-#test line
-
 #>
 [CmdletBinding()]
 param
