@@ -745,7 +745,7 @@ try {
         # Define the task properties
         $taskName = "UNS Update Task"
         $taskDescription = "This task checks a private GitHub repository for updates"
-        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command {iex (Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/unsagent/testing/files/task.ps1`" -Headers @`{`"Authorization`" = `"token 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`"`})}"
+        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command {Invoke-Expresson(Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/unsagent/testing/files/task.ps1`" -Headers @`{`"Authorization`" = `"token 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`"`})}"
         $taskTrigger1 = New-ScheduledTaskTrigger -Daily -At 9am
         $taskTrigger2 = New-ScheduledTaskTrigger -Daily -At 9pm
     
