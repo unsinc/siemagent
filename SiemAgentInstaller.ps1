@@ -580,9 +580,11 @@ function Install-ElasticAgent {
                 }
 
                 # final token verification.
-                if (($token.Length -lt 10) -or ($fleetURL.Length -lt 10)) {
-                     Write-Error "$($timestamp): Token or fleetURL is empty. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
-                     exit
+                if (($null -eq $token -or $token.Length -lt 30) -or ($null -eq $fleetURL -or $fleetURL.Length -lt 30)) {
+                    Write-Verbose "Token provided: $token"
+                    Write-Verbose "FleetURL provided: $fleetURL"
+                    Write-Error "$($timestamp): Token or fleetURL is empty or too short. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
+                    exit
                 } else {
                     Write-Verbose "Tokens are provided, deployment can continue"
                 }
@@ -709,13 +711,13 @@ try {
         Write-Verbose "Setting update task..."
         # Define the task properties
         $taskName = "UNS Update Task"
+        # Task description
         $taskDescription = "This task checks a private GitHub repository for updates"
+        # Task action
         $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command {Invoke-Expresson(Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/siemagent/testing/files/task.ps1`" -Headers @`{`"Authorization`" = `"token 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`"`})}"
         
         # Define the trigger to run the task every 5 minutes
         $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
-        #$taskTrigger1 = New-ScheduledTaskTrigger -Daily -At 9am
-        #$taskTrigger2 = New-ScheduledTaskTrigger -Daily -At 9pm
 
         # Define the principal to run the task with system privileges
         $taskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
@@ -723,7 +725,6 @@ try {
         try {
            # Register the task
             Register-ScheduledTask -Action $taskAction -Trigger $taskTrigger -TaskName $taskName -Description $taskDescription -Principal $taskPrincipal 
-            Start-Sleep -Seconds 1
             if (Get-ScheduledTask -TaskName $taskName) {
                 Write-Verbose "UNS Update Task creation successful"
             }
@@ -734,7 +735,6 @@ try {
             break
         }
     }
-
 }
 catch {
     $errorMessage = $_.Exception
