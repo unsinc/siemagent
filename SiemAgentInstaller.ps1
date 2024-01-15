@@ -579,33 +579,14 @@ function Install-ElasticAgent {
                     $fleetURL = $tokenVars[1]
                 }
 
-                #additional token verification.
-                Write-Verbose "Token provided is: $token"
-                Write-Verbose "FleetURL provided is: $fleetURL"
-                if ($fleetURL.Length -eq 0) {
-                    $null = $fleetURL
-                }
-                elseif ($token.Length -eq 0) {
-                    $null = $token
+                # final token verification.
+                if (($token.Length -lt 10) -or ($fleetURL.Length -lt 10)) {
+                     Write-Error "$($timestamp): Token or fleetURL is empty. Seems that the user cancelled the input" -ErrorAction Stop
+                     exit
+                } else {
+                    Write-Verbose "Tokens are provided, deployment can continue"
                 }
 
-                # final token verification.
-                try {
-                        if (($null -eq $token) -or ($null -eq $fleetURL)) {
-                            Write-Verbose "$($timestamp): Token is empty. Seems that the user cancelled the input"
-                            Write-Error "User cancelled the input" -ErrorAction Stop
-                            exit
-                        else {
-                            Write-Verbose "Tokens are provided, deployment can continue"
-                        }
-                    }
-                }
-                catch {
-                    $errorMessage = $_.Exception
-                    Write-Error "Token/FleetURL Error caused by $errorMessage" -ErrorAction Stop
-                    exit
-                }
-            
          	$arguments = "install -f"
             $arguments += " --url=$fleetURL"
             $arguments += " --enrollment-token=$token"
