@@ -26,11 +26,11 @@ $latestVersion = $response.tag_name
 Add-Type -AssemblyName System.Windows.Forms
 if ($latestVersion -eq "2024.01.15") {
 
-    [System.Windows.Forms.MessageBox]::Show('No updates Available', 'UNS Agent Updater', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    Write-Output "No updates available" > $env:temp + "\unsupdater.log"
 
 } else {
 
-    [System.Windows.Forms.MessageBox]::Show('Updates available', 'UNS Agent Updater', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+    Write-Output "updates available. New version is $latestVersion" > $env:temp + "\unsupdater.log"
 
 }
 
