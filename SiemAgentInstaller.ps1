@@ -3,7 +3,7 @@
 UNS SIEM Agent deployment tool
 
 .DESCRIPTION
-Deployment scrip will perform following tasks:
+Deployment script will perform following tasks:
 1. Uninstall Sysmon 32 bit from the system.
 2. Install Sysmon 64bit on the system.
 3. Install and enforce proprietary Sysmon64 config file.
