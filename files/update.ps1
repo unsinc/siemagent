@@ -1,1 +1,1 @@
-Write-Output "Worked!"
+Write-Output "Worked!" | Out-File -FilePath $env:HOMEDRIVE\Windows\Temp\UnsAgentUpdater.log -Append -ErrorAction SilentlyContinue

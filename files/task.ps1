@@ -1,7 +1,7 @@
 # Define the repository
 $user = "unsinc"
 $repo = "siemagent"
-$tempPath = "C:\Windows\Temp\UnsAgentUpdater.log"
+$tempPath = "$env:HOMEDRIVE\Windows\Temp\UnsAgentUpdater.log"
 
 # Timestamp function
 function Get-FormattedTimestamp {
