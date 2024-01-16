@@ -14,7 +14,7 @@ function Get-FormattedTimestamp {
 }
 
 $timestamp = Get-FormattedTimestamp
-Write-Verbose -Message "Timestamp is: $timestamp" 
+Write-Verbose -Message "Timestamp is: $timestamp"
 
 try {
     # Call the GitHub API
