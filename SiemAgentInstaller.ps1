@@ -213,7 +213,7 @@ foreach ($url in $originalLinks) {
 $agentFiles = @(
     "Sysmon.zip",
     "UNS-Sysmon.xml",
-	"uns-agent.zip",
+    "uns-agent.zip",
     "logo.ico",
     "logo.png"
 )
@@ -416,7 +416,7 @@ function Wait-Service {
 function Show-TokenForm {
     # Create a form
     $form = New-Object Windows.Forms.Form
-    $form.Text = 'UNS Elastic'
+    $form.Text = 'UNS SIEM Agent'
     $form.Size = New-Object Drawing.Size @(350, 230)
     $form.StartPosition = 'CenterScreen'
     # Set FormBorderStyle to FixedDialog
@@ -458,7 +458,7 @@ function Show-TokenForm {
     $label2 = New-Object Windows.Forms.Label
     $label2.Location = New-Object Drawing.Point @(120, 80)
     $label2.Size = New-Object Drawing.Size @(200, 20)
-    $label2.Text = 'Please provide Fleet URL'
+    $label2.Text = 'Please provide fleetURL'
     $form.Controls.Add($label2)
 
     # Create a secondary text box
@@ -504,7 +504,7 @@ function Install-ElasticAgent {
     param (
     )
         try {
-			Write-Output "$timestamp : Downloading and installing elastic agent."
+			Write-Output "$timestamp : Downloading and installing UNS SIEM Agent."
 
             Start-Sleep -Milliseconds 500
 
@@ -589,14 +589,14 @@ function Install-ElasticAgent {
                         Write-Error "$($timestamp): fleetURL or token is empty. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
                     }
                 }
+		
+  		$arguments = "install -f"
+  		$arguments += " --url=$fleetURL"
+		$arguments += " --enrollment-token=$token"
 
-         	$arguments = "install -f"
-            $arguments += " --url=$fleetURL"
-            $arguments += " --enrollment-token=$token"
-
-            Write-Verbose -Message "$($timestamp) Elastic agent Path: $InstallDIR`agent"
-            Write-Verbose -Message "$($timestamp) Elastic fleet URL: $fleetURL"
-            Write-Verbose -Message "$($timestamp) Elastic enrollment token: $token"
+            Write-Verbose -Message "$($timestamp) UNS SIEM Agent path: $InstallDIR`agent"
+            Write-Verbose -Message "$($timestamp) UNS SIEM fleetURL: $fleetURL"
+            Write-Verbose -Message "$($timestamp) UNS SIEM enrollment token: $token"
             
             # additional check if token was provided and value is not null
             if ($null -eq $token) {
@@ -607,12 +607,12 @@ function Install-ElasticAgent {
             } else {
                 # installing elastic services
                 try {
-                    Write-Verbose "Installing ElasticSIEM Agent..."
+                    Write-Verbose "Installing UNS SIEM Agent..."
                 # Insalling UNS SIEM Agent
                 $process = Start-Process -FilePath "$InstallDIR\agent\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
                 $process.WaitForExit()
                 
-                Write-Verbose -Message "$($timestamp) Elastic Agent has been installed."
+                Write-Verbose -Message "$($timestamp) UNS SIEM Agent has been installed."
                 Start-Sleep -Milliseconds 3
                 }
                 catch {
@@ -647,7 +647,7 @@ function Install-ElasticAgent {
                         Start-Service -Name "UNSAgent"
                         Wait-Service -serviceName "UNSAgent" -status "Running"
                         if ((Get-Service "UNSAgent").Status -eq "Running") {
-                            Write-Verbose "'UNSAgent' service, successfully started."
+                            Write-Verbose "'UNS Agent' service, successfully started."
                         }
     
                     }
@@ -662,7 +662,7 @@ function Install-ElasticAgent {
         } 
         catch {
                 $errorMessage = $_.Exception
-                Write-Error "$($timestamp) UNS ElasticSIEM Agent deployment failed for following reason: $($errorMessage)"
+                Write-Error "$($timestamp) UNS SIEM Agent deployment failed for following reason: $($errorMessage)"
                 Remove-ElasticLeftovers -path $InstallDIR\agent
                 Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
                 break
@@ -711,7 +711,7 @@ try {
 
         Write-Verbose "Setting update task..."
         # Define the task properties
-        $taskName = "UNS Update Task"
+        $taskName = "UNS SIEM Agent Update Task"
         # Task description
         $taskDescription = "This task checks a private GitHub repository for updates"
         # Task action
@@ -739,7 +739,7 @@ try {
 }
 catch {
     $errorMessage = $_.Exception
-    Write-Error "$($timestamp) UNS ElasticSIEM Agent deployment failed because of $($errorMessage)"
+    Write-Error "$($timestamp) UNS SIEM Agent deployment failed because of $($errorMessage)"
     break
 }
 finally {
