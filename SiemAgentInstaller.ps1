@@ -707,7 +707,7 @@ try {
         Write-Output "Something went wrong"
     }
 
-    if (Get-Service -Name "UNSAgent") {
+   <# if (Get-Service -Name "UNSAgent") {
 
         Write-Verbose "Setting update task..."
         # Define the task properties
@@ -735,7 +735,7 @@ try {
             Write-Error "$($timestamp) UNS Agent Update Task creation failed because of $($errorMessage)"
             break
         }
-    }
+    } #>
 }
 catch {
     $errorMessage = $_.Exception
