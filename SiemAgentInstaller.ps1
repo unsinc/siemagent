@@ -29,10 +29,6 @@ Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM inst
 .PARAMETER logpath
 Use this switch to direct the log/data output to the specified directory.
 
-.PARAMETER SlackURI
-Use this switch to provide slack URI
-Example: .\elastic_installer.ps1 -SlackURI https://hooks.slack.com/services/T3BMPT6C1/B14TEQDBz52/VJDw5aGVlVvJeXdtLvgBxWGL 
-
 #>
 [CmdletBinding()]
 param
@@ -40,18 +36,19 @@ param
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
     [ValidatePattern("^[a-zA-Z0-9+/]+={0,2}$")]
 	[string[]]$token,
-
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
     [ValidatePattern("^https:\/\/.*")]
 	[string[]]$fleetURL,
-
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
 	[string[]]$logpath,
-
-    [Parameter(Mandatory = $false,ValueFromPipeline=$true)]
-	[string[]]$SlackURI
+    [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
 
+    if($invalid_parameter)
+    {
+        Write-Output "[-] $($invalid_parameter) is not a valid parameter"
+        throw
+    }
 
 # Check if the script is running with elevated privileges
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
