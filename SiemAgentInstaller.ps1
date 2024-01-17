@@ -3,7 +3,7 @@
 UNS SIEM Agent deployment tool
 
 .DESCRIPTION
-Deployment script will perform following tasks:
+Deployment scrip will perform following tasks:
 1. Uninstall Sysmon 32 bit from the system.
 2. Install Sysmon 64bit on the system.
 3. Install and enforce proprietary Sysmon64 config file.
@@ -29,10 +29,6 @@ Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM inst
 .PARAMETER logpath
 Use this switch to direct the log/data output to the specified directory.
 
-.PARAMETER SlackURI
-Use this switch to provide slack URI
-Example: .\elastic_installer.ps1 -SlackURI https://hooks.slack.com/services/T3BMPT6C1/B14TEQDBz52/VJDw5aGVlVvJeXdtLvgBxWGL 
-
 #>
 [CmdletBinding()]
 param
@@ -48,15 +44,20 @@ param
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
 	[string[]]$logpath,
 
-    [Parameter(Mandatory = $false,ValueFromPipeline=$true)]
-	[string[]]$SlackURI
+    [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
 
+    if($invalid_parameter)
+    {
+        Write-Output "[-] $($invalid_parameter) is not a valid parameter"
+        throw
+
+    }
 
 # Check if the script is running with elevated privileges
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     # Relaunch the script with elevated privileges
-    Write-Output "Rerun as administrator please."
+    Write-Output "[-] Administrator privileges required."
     Start-Sleep 5
     exit
 }
@@ -110,11 +111,19 @@ if ($logpath) {
         Write-Verbose "$logpath directory exist."
     } else {
         try {
-            New-Item -Path $logpath -ItemType Directory -ErrorAction Stop 
+            New-Item -Path $logpath -ItemType Directory -Force -ErrorAction Stop
+        }
+        catch [System.IO.PathTooLongException] {
+            $errorMessage = "File Path too long. Maximum allowed characters 256."
+            throw $errorMessage
+            Start-Sleep 5
+            exit
         }
         catch {
             $errorMessage = $_.Exception
-            Write-Verbose "$logpath folder creation failed because of: $errorMessage"
+            Write-Output "$logpath folder creation failed because of: $errorMessage"
+            Start-Sleep 5
+            exit
         }
     }
 } else {
@@ -173,10 +182,10 @@ Write-Verbose -Message "$($timestamp) Current location is: $currentLocation"
 # Add your links here in same order.
 $originalLinks = @(
     "https://download.sysinternals.com/files/Sysmon.zip"  ## UNS Sysmon File
-	"https://raw.githubusercontent.com/unsinc/files/main/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
+	"https://raw.githubusercontent.com/unsinc/siemagent/main/files/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
 	"https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.11.3-windows-x86_64.zip"   ## Elastic elastic-agent
-    "https://raw.githubusercontent.com/unsinc/files/main/logo.ico"   ## UNS Logo ico
-    "https://raw.githubusercontent.com/unsinc/files/main/logo.png"   ## UNS Logo
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.ico"   ## UNS Logo ico
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.png"   ## UNS Logo
 )
 
 # Function to modify google drive share links into downloadable format.
@@ -213,7 +222,7 @@ foreach ($url in $originalLinks) {
 $agentFiles = @(
     "Sysmon.zip",
     "UNS-Sysmon.xml",
-    "uns-agent.zip",
+	"uns-agent.zip",
     "logo.ico",
     "logo.png"
 )
@@ -260,7 +269,7 @@ try {
     foreach ($dir in $directories) {
         $dirPath = Join-Path -Path $InstallDIR -ChildPath $dir
         if (-not (Test-Path $dirPath)) {
-            New-Item -Path $dirPath -ItemType Directory -ErrorAction Stop
+            New-Item -Path $dirPath -ItemType Directory -Force -ErrorAction Stop
             Write-Output "$dir folder created successfully." 
             Write-Verbose -Message "$($timestamp) $dir folder created successfully."
         } else {
@@ -297,6 +306,13 @@ function CopyFilesToDir {
             }
 
             Copy-Item "$logpath\UNS-Sysmon.xml" -Destination "$InstallDIR\configs\" -ErrorAction Stop
+        }
+        catch [FileNotFoundException] {
+            Write-Output "File not found. Attempting to download again."
+            throw
+            $copySuccessful = $false
+            $retryCount++
+            throw 
         }
         catch {
             Write-Error "Sysmon files copy failed"
@@ -416,7 +432,7 @@ function Wait-Service {
 function Show-TokenForm {
     # Create a form
     $form = New-Object Windows.Forms.Form
-    $form.Text = 'UNS SIEM Agent'
+    $form.Text = 'UNS Elastic'
     $form.Size = New-Object Drawing.Size @(350, 230)
     $form.StartPosition = 'CenterScreen'
     # Set FormBorderStyle to FixedDialog
@@ -458,7 +474,7 @@ function Show-TokenForm {
     $label2 = New-Object Windows.Forms.Label
     $label2.Location = New-Object Drawing.Point @(120, 80)
     $label2.Size = New-Object Drawing.Size @(200, 20)
-    $label2.Text = 'Please provide fleetURL'
+    $label2.Text = 'Please provide Fleet URL'
     $form.Controls.Add($label2)
 
     # Create a secondary text box
@@ -504,7 +520,7 @@ function Install-ElasticAgent {
     param (
     )
         try {
-			Write-Output "$timestamp : Downloading and installing UNS SIEM Agent."
+			Write-Output "$timestamp : Downloading and installing elastic agent."
 
             Start-Sleep -Milliseconds 500
 
@@ -589,14 +605,14 @@ function Install-ElasticAgent {
                         Write-Error "$($timestamp): fleetURL or token is empty. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
                     }
                 }
-		
-  		$arguments = "install -f"
-  		$arguments += " --url=$fleetURL"
-		$arguments += " --enrollment-token=$token"
 
-            Write-Verbose -Message "$($timestamp) UNS SIEM Agent path: $InstallDIR`agent"
-            Write-Verbose -Message "$($timestamp) UNS SIEM fleetURL: $fleetURL"
-            Write-Verbose -Message "$($timestamp) UNS SIEM enrollment token: $token"
+         	$arguments = "install -f"
+            $arguments += " --url=$fleetURL"
+            $arguments += " --enrollment-token=$token"
+
+            Write-Verbose -Message "$($timestamp) Elastic agent Path: $InstallDIR`agent"
+            Write-Verbose -Message "$($timestamp) Elastic fleet URL: $fleetURL"
+            Write-Verbose -Message "$($timestamp) Elastic enrollment token: $token"
             
             # additional check if token was provided and value is not null
             if ($null -eq $token) {
@@ -607,12 +623,12 @@ function Install-ElasticAgent {
             } else {
                 # installing elastic services
                 try {
-                    Write-Verbose "Installing UNS SIEM Agent..."
+                    Write-Verbose "Installing ElasticSIEM Agent..."
                 # Insalling UNS SIEM Agent
                 $process = Start-Process -FilePath "$InstallDIR\agent\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
                 $process.WaitForExit()
                 
-                Write-Verbose -Message "$($timestamp) UNS SIEM Agent has been installed."
+                Write-Verbose -Message "$($timestamp) Elastic Agent has been installed."
                 Start-Sleep -Milliseconds 3
                 }
                 catch {
@@ -647,7 +663,7 @@ function Install-ElasticAgent {
                         Start-Service -Name "UNSAgent"
                         Wait-Service -serviceName "UNSAgent" -status "Running"
                         if ((Get-Service "UNSAgent").Status -eq "Running") {
-                            Write-Verbose "'UNS Agent' service, successfully started."
+                            Write-Verbose "'UNSAgent' service, successfully started."
                         }
     
                     }
@@ -662,7 +678,7 @@ function Install-ElasticAgent {
         } 
         catch {
                 $errorMessage = $_.Exception
-                Write-Error "$($timestamp) UNS SIEM Agent deployment failed for following reason: $($errorMessage)"
+                Write-Error "$($timestamp) UNS ElasticSIEM Agent deployment failed for following reason: $($errorMessage)"
                 Remove-ElasticLeftovers -path $InstallDIR\agent
                 Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
                 break
@@ -711,11 +727,11 @@ try {
 
         Write-Verbose "Setting update task..."
         # Define the task properties
-        $taskName = "UNS SIEM Agent Update Task"
+        $taskName = "UNS Update Task"
         # Task description
         $taskDescription = "This task checks a private GitHub repository for updates"
         # Task action
-        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command {Invoke-Expression(Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/siemagent/testing/files/task.ps1`" -Headers @`{`"Authorization`" = `"token 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`"`})}"
+        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle hidden -Command {Invoke-Expression(Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/files/main/task.ps1`" -UseBasicParsing)} 2> `"C:\Windows\Temp\error.txt`""
         
         # Define the trigger to run the task every 5 minutes
         $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
@@ -739,7 +755,7 @@ try {
 }
 catch {
     $errorMessage = $_.Exception
-    Write-Error "$($timestamp) UNS SIEM Agent deployment failed because of $($errorMessage)"
+    Write-Error "$($timestamp) UNS ElasticSIEM Agent deployment failed because of $($errorMessage)"
     break
 }
 finally {
