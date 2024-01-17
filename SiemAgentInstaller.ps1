@@ -259,7 +259,7 @@ for ($i=0; $i -lt $downloadUrls.Length; $i++) {
 
 # Create necessary directories
 try {
-    $directories = @("sysmon", "configs", "agent")
+    $directories = @("sysmon", "configs")
 
     foreach ($dir in $directories) {
         $dirPath = Join-Path -Path $InstallDIR -ChildPath $dir
@@ -779,6 +779,7 @@ try {
             break
         }
     } #>
+
 }
 catch {
     $errorMessage = $_.Exception
