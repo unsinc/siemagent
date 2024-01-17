@@ -62,7 +62,6 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     exit
 }
 
-
 ## setttings ##
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 if ($fleetURL) {
@@ -154,6 +153,7 @@ if (Test-Path $InstallDIR) {
         Write-Output "Creating folders failed because: $errorMessage"
     }
 }
+
 
 # Remove leftovers from Elastic folder
 function Remove-ElasticLeftovers {
@@ -343,7 +343,7 @@ function Uninstall-Sysmon32 {
     Write-Output "$($timestamp) Sysmon32 was found, uninstalling" 
     Write-Verbose -Message "$($timestamp) Sysmon32 was found, uninstalling"
     try {
-        $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon.exe" -ArgumentList "-u" -NoNewWindow -PassThru
+        $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon.exe" -ArgumentList "-u force"  -NoNewWindow -PassThru
         $process.WaitForExit()
         Write-Output  "$($timestamp) Uninstall of Sysmon32 is complete" 
         Write-Verbose -Message "Uninstall of Sysmon32 is complete."
