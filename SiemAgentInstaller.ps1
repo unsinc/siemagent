@@ -71,7 +71,7 @@ if ($token) {
 Write-Verbose "Token is: $token"
 }
 
-$sysmon32 = Get-Service -Name "Sysmon" -ErrorAction SilentlyContinue
+
 $currentLocation = Get-Location
 $InitialLocation = $currentLocation
 Write-Verbose -Message "Initial location is: $($InitialLocation)"
@@ -305,8 +305,24 @@ function CopyFilesToDir {
                 $copySuccessful = $true
             }
 
-            Copy-Item "$logpath\UNS-Sysmon.xml" -Destination "$InstallDIR\configs\" -ErrorAction Stop
-
+            try {
+                Copy-Item "$logpath\UNS-Sysmon.xml" -Destination "$InstallDIR\configs\" -ErrorAction Stop
+                $copySuccessful = $true
+            }
+            catch {
+                Write-Error "Failed to copy UNS-Sysmon.xml"
+                $errorMessage = $_.Exception.Message
+                Write-Error "Error copying UNS-Sysmon.xml because: $errorMessage"
+                $copySuccessful = $false
+                $retryCount++
+            }
+        }
+        catch [FileNotFoundException] {
+            Write-Output "File not found. Attempting to download again."
+            throw
+            $copySuccessful = $false
+            $retryCount++
+            throw 
         }
         catch {
             Write-Error "Sysmon files copy failed"
@@ -322,9 +338,7 @@ function CopyFilesToDir {
         exit
     }
 }
-
 CopyFilesToDir
-
 
 # Set current location to the installation directory
 Set-Location -Path $InstallDIR -ErrorAction Stop
@@ -547,8 +561,7 @@ function Install-ElasticAgent {
                     Write-Verbose "Moving agent files from $agentSrcPath to $agentDstPath"
                     Get-ChildItem -Path $agentSrcPath -Recurse | ForEach-Object {
                     $destination = $agentDstPath + $_.FullName.Substring($agentSrcPath.Length)
-                    $itemtype = (Get-ChildItem $destination -ErrorAction SilentlyContinue | ForEach-Object { $_.Extension })
-                    Write-Verbose "Moving item $($_.FullName) (type: $itemType) to $destination"
+                    Write-Verbose "Moving item $($_.FullName) to $destination"
                         try {
                             Move-Item -Path $_.FullName -Destination $destination -Force -ErrorAction Stop
                         }
@@ -633,31 +646,44 @@ function Install-ElasticAgent {
                 }
 
                 #modifying services
-                if (Get-Service -Name "Elastic Agent") {
+                if (Get-Service -ServiceName "Elastic Agent") {
                     try {
-                        #Delete and recreate service:
-                        Write-Verbose "Services operations began:"
+                        #Rename elastic service:
+                        Write-Verbose "Services operations started:"
                         Start-Sleep -Milliseconds 500
-                        Write-Verbose "Stopping elastic agent service"
-                        Stop-Service -Name "Elastic Agent" -ErrorAction Stop
+                        try {
+                            Write-Verbose "Stopping elastic agent service"
+                            Stop-Service -ServiceName "Elastic Agent" -ErrorAction Stop 
+                        }
+                        catch {
+                            $errorMessage = $_.Exception
+                            Write-Output $errorMessage
+                        }
                         Start-Sleep -Milliseconds 500
-                        Write-Verbose "Renaming elastic agent to UNSAgent.exe"
-                        Rename-Item -Path "$InstallDIR\agent\elastic-agent.exe" -NewName "UNSAgent.exe" -ErrorAction Stop
+                        Write-Verbose "Renaming elastic agent service name"
+                        try {
+
+                            Set-Service -ServiceName "Elastic Agent" -DisplayName "UNS SIEM Agent" -ErrorAction Stop
+                            Set-Service -ServiceName "Elastic Agent" -Description "UNS SIEM Agent is a unified agent to observe, monitor and protect your system."
+
+                        }
+                        catch {
+                            $errorMessage = $_.Exception
+                            Write-Output $errorMessage
+                        }
                         Start-Sleep -Milliseconds 500
-                        Write-Verbose "Deleting Elastic Agent service"
-                        sc.exe delete "Elastic Agent" -ErrorAction Stop
-                        Start-Sleep -Milliseconds 500
-                        Write-Verbose "Creating UNSAgent service with $InstallDIR\agent\UNSAgent.exe service path"
-                        sc.exe create "UNSAgent" binPath= "$InstallDIR\agent\UNSAgent.exe" start= "auto" DisplayName= "UNS SIEM Agent"
-                        Start-Sleep -Milliseconds 500
-                        Write-Verbose "Setting UNSAgent service description."
-                        sc.exe description "UNSAgent" "UNS SIEM Agent is elastic-based unified agent to observe, monitor and protect your system."
-                        Start-Sleep -Milliseconds 500
+                        #starting service back
                         Write-Verbose "Attempting to start new service"
-                        Start-Service -Name "UNSAgent"
-                        Wait-Service -serviceName "UNSAgent" -status "Running"
-                        if ((Get-Service "UNSAgent").Status -eq "Running") {
-                            Write-Verbose "'UNSAgent' service, successfully started."
+                        try {
+                            Start-Service -ServiceName "Elastic Agent"
+                        }
+                        catch {
+                            $errorMessage = $_.Exception
+                            Write-Output $errorMessage
+                        }
+                        Wait-Service -serviceName "Elastic Agent" -status "Running"
+                        if ((Get-Service -ServiceName "Elastic Agent").Status -eq "Running") {
+                            Write-Verbose "'UNS SIEM Agent' service, successfully started."
                         }
     
                     }
@@ -687,12 +713,11 @@ try {
     } else 
         {Write-Output "Perch is not installed on the system"
     }
-    if ($null -eq $sysmon32) {
-        $sysmon64 = Get-Service -Name "Sysmon64" -ErrorAction SilentlyContinue
-        if ($sysmon64) {
-            Write-Output "Sysmon64 already is already installed."
+    if ($null -eq (Get-Service -Name "Sysmon" -ErrorAction SilentlyContinue)) {
+        if ((Get-Service -Name "Sysmon64" -ErrorAction SilentlyContinue)) {
+            Write-Output "Sysmon64 already installed."
         } else {
-            Write-Verbose "Sysmon64 is not installed on the system. Installing..."
+            Write-Verbose "Sysmon64 not installed on the system. Installing..."
             Install-Sysmon64
             Set-Sysmon64
         }    
@@ -725,8 +750,10 @@ try {
         # Task description
         $taskDescription = "This task checks a private GitHub repository for updates"
         # Task action
-        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle hidden -Command {Invoke-Expression(Invoke-RestMethod -Uri `"https://raw.githubusercontent.com/unsinc/files/main/task.ps1`" -UseBasicParsing)} 2> `"C:\Windows\Temp\error.txt`""
-        
+
+        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -Command {IEX(New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/unsinc/siemagent/main/files/task.ps1')}"
+
+
         # Define the trigger to run the task every 5 minutes
         $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
 

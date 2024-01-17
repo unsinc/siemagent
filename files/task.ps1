@@ -46,11 +46,9 @@ if ($latestVersion -eq "2024.01.15") {
         $errorMessage = $_.Exception
         $messages += "$errorMessage"
         Start-Sleep 3
-        exit
     }
 } else {
     $messages += "Version is below currently installed agent version or just empty. Exiting."
-    exit
 }
 
 # Write all messages to the log file
