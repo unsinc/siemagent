@@ -306,13 +306,7 @@ function CopyFilesToDir {
             }
 
             Copy-Item "$logpath\UNS-Sysmon.xml" -Destination "$InstallDIR\configs\" -ErrorAction Stop
-        }
-        catch [FileNotFoundException] {
-            Write-Output "File not found. Attempting to download again."
-            throw
-            $copySuccessful = $false
-            $retryCount++
-            throw 
+            
         }
         catch {
             Write-Error "Sysmon files copy failed"
