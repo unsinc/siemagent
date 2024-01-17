@@ -538,46 +538,15 @@ function Install-ElasticAgent {
                     Write-Verbose "LogPath is: $logpath"
                     $archiveFile = $logpath.Trim() + $agentFiles[2].Trim()
                     Write-Verbose "Archive file is $archiveFile"
-                    Expand-Archive $archiveFile -DestinationPath $logpath\agent -Force -ErrorAction Stop
+                    Expand-Archive $archiveFile -DestinationPath $logpath -Force -ErrorAction Stop
+                    $agentinstallPath = $logpath.Trim() + (Get-Item -Path $logpath\elastic-agent-*).Name
+                    
                     Start-Sleep -Milliseconds 500
-                    Write-Verbose "All files were unzipped, moving files to $installDIR\agent now..."
+                    Write-Verbose "All files were unzipped, installing agent..."
                 }
                 catch {
                     $errorMessage = $_.Exception
                     Write-Error "$($timestamp) Agent files copy failed because of $($errorMessage)" -ErrorAction Stop
-                    exit
-                }
-                # moving files to ProgramFiles directory
-                try {
-                    $agentVersion = (Get-ChildItem $logpath\agent -Filter "elastic-agent-*").Name
-                    Write-Verbose "Agent version path: $agentVersion"
-
-                    $agentSrcPath = ($logpath.Trim() + 'agent\' + $agentVersion.Trim())
-                    Write-Verbose "Agent source path: $agentSrcPath"
-                    $agentDstPath = "$($InstallDIR)\agent"
-                    Write-Verbose "Agent destination path: $agentDstPath"
-
-                    # Move all items from the source to the destination
-                    Write-Verbose "Moving agent files from $agentSrcPath to $agentDstPath"
-                    Get-ChildItem -Path $agentSrcPath -Recurse | ForEach-Object {
-                    $destination = $agentDstPath + $_.FullName.Substring($agentSrcPath.Length)
-                    Write-Verbose "Moving item $($_.FullName) to $destination"
-                        try {
-                            Move-Item -Path $_.FullName -Destination $destination -Force -ErrorAction Stop
-                        }
-                        catch {
-                            Write-Verbose "Failed to move item $($_.FullName) to $($destination+':') $($_.Exception.Message)"
-                            Remove-ElasticLeftovers -path $InstallDIR\agent
-                            exit
-                        }
-                    
-                    }
-                    Write-Verbose "All files were moved to $InstallDIR\agent"
-                }
-                catch {
-                    $errorMessage = $_.Exception
-                    Write-Error "$($timestamp) Moving agent files to $agentDstPath failed because of $($errorMessage)" -ErrorAction Stop
-                    Remove-ElasticLeftovers -path $InstallDIR\agent
                     exit
                 }
                 
@@ -616,15 +585,14 @@ function Install-ElasticAgent {
          	$arguments = "install -f"
             $arguments += " --url=$fleetURL"
             $arguments += " --enrollment-token=$token"
-
-            Write-Verbose -Message "$($timestamp) Elastic agent Path: $InstallDIR`agent"
+                
+            Write-Verbose -Message "$($timestamp) UNS SIEM Agent Install Path: $agentinstallPath"
             Write-Verbose -Message "$($timestamp) Elastic fleet URL: $fleetURL"
             Write-Verbose -Message "$($timestamp) Elastic enrollment token: $token"
             
             # additional check if token was provided and value is not null
             if ($null -eq $token) {
                 Write-Verbose "Token issues after token forms"
-                Remove-ElasticLeftovers -path $InstallDIR\agent
                 exit
 
             } else {
@@ -632,7 +600,7 @@ function Install-ElasticAgent {
                 try {
                     Write-Verbose "Installing ElasticSIEM Agent..."
                 # Insalling UNS SIEM Agent
-                $process = Start-Process -FilePath "$InstallDIR\agent\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
+                $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
                 $process.WaitForExit()
                 
                 Write-Verbose -Message "$($timestamp) Elastic Agent has been installed."
@@ -641,7 +609,6 @@ function Install-ElasticAgent {
                 catch {
                     $errorMessage = $_.Exception
                     Write-Output "$($timestamp) Installation failed because of $($errorMessage)"
-                    Remove-ElasticLeftovers -path $InstallDIR\agent
                     exit
                 }
 
@@ -657,8 +624,9 @@ function Install-ElasticAgent {
                         }
                         catch {
                             $errorMessage = $_.Exception
-                            Write-Output $errorMessage
+                            Write-Error $errorMessage -ErrorAction Stop
                         }
+                        #set service displayname and description
                         Start-Sleep -Milliseconds 500
                         Write-Verbose "Renaming elastic agent service name"
                         try {
@@ -669,10 +637,33 @@ function Install-ElasticAgent {
                         }
                         catch {
                             $errorMessage = $_.Exception
-                            Write-Output $errorMessage
+                            Write-Error $errorMessage -ErrorAction Stop
                         }
                         Start-Sleep -Milliseconds 500
-                        #starting service back
+
+                        #Moving agent files to Program Files
+                        $source = $env:programfiles.Trim() + "\Elastic\Agent".Trim()
+                        $destination = $env:programfiles.Trim() + "\UNS SIEM Agent\agent".Trim()
+                        $agentfiles = Get-ChildItem $source -Recurse -ErrorAction SilentlyContinue | ForEach-Object {$_.FullName}
+                        try {
+                            foreach ($file in $agentfiles) {Move-Item -Path $file -Destination $destination -ErrorAction SilentlyContinue}
+                        }
+                        catch {
+                            $errorMessage = $_.Exception
+                            Write-Error $errorMessage -ErrorAction Stop
+                            
+                        }
+
+                        #assuming everything went through, lets modify service binPath
+                        try {
+                            sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
+                        }
+                        catch {
+                            $errorMessage = $_.Exception
+                            Write-Error $errorMessage -ErrorAction Stop
+                        }
+
+                        #Atetmpting to start uns siem agent
                         Write-Verbose "Attempting to start new service"
                         try {
                             Start-Service -ServiceName "Elastic Agent"
@@ -689,8 +680,7 @@ function Install-ElasticAgent {
                     }
                     catch {
                         $errorMessage = $_.Exception
-                        Write-Output "$($timestamp) Modifying services failed because of $($errorMessage)"
-                        Remove-ElasticLeftovers -path $InstallDIR\agent
+                        Write-Error "$($timestamp) Modifying services failed because of $($errorMessage)" -ErrorAction Stop
                         Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
                     }
                 }
@@ -698,10 +688,8 @@ function Install-ElasticAgent {
         } 
         catch {
                 $errorMessage = $_.Exception
-                Write-Error "$($timestamp) UNS ElasticSIEM Agent deployment failed for following reason: $($errorMessage)"
-                Remove-ElasticLeftovers -path $InstallDIR\agent
+                Write-Error "$($timestamp) UNS ElasticSIEM Agent deployment failed for following reason: $($errorMessage)" -ErrorAction Stop
                 Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
-                break
         }
 }
 
@@ -735,7 +723,7 @@ try {
 
     if (($null -eq (Get-Service -Name Perch*)) -and (Get-Service -Name Sysmon64)) { 
         Install-ElasticAgent
-            if ($null -ne (Get-Service -Name "UNSAgent")) {
+            if ($null -ne (Get-Service -ServiceName "Elastic Agent")) {
                 Write-Verbose "UNS SIEM Agent successfully installed"
             }
     } else {
