@@ -667,8 +667,8 @@ function Install-ElasticAgent {
                         # Get the file within the dynamic folder
                         $agentfile = Get-ChildItem -Path $dynamicFolder.FullName -Recurse -File | Where-Object { $_.Name -eq $agentname }
                         $agentfile.FullName
-
-                        New-Item -ItemType SymbolicLink -Path $InstallDIR\agent\elastic-agent.exe -Target $agentfile.FullName
+                        Remove-Item -Path $InstallDIR\agent\elastic-agent.exe -Force
+                        New-Item -ItemType SymbolicLink -Path $InstallDIR\agent\elastic-agent.exe -Target $agentfile.FullName -Force
 
                         try {
                             sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
