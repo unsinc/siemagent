@@ -36,11 +36,14 @@ param
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
     [ValidatePattern("^[a-zA-Z0-9+/]+={0,2}$")]
 	[string[]]$token,
+
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
     [ValidatePattern("^https:\/\/.*")]
 	[string[]]$fleetURL,
+
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
 	[string[]]$logpath,
+
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
 
@@ -48,12 +51,13 @@ param
     {
         Write-Output "[-] $($invalid_parameter) is not a valid parameter"
         throw
+
     }
 
 # Check if the script is running with elevated privileges
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     # Relaunch the script with elevated privileges
-    Write-Output "Rerun as administrator please."
+    Write-Output "[-] Administrator privileges required."
     Start-Sleep 5
     exit
 }
@@ -107,11 +111,19 @@ if ($logpath) {
         Write-Verbose "$logpath directory exist."
     } else {
         try {
-            New-Item -Path $logpath -ItemType Directory -ErrorAction Stop 
+            New-Item -Path $logpath -ItemType Directory -Force -ErrorAction Stop
+        }
+        catch [System.IO.PathTooLongException] {
+            $errorMessage = "File Path too long. Maximum allowed characters 256."
+            throw $errorMessage
+            Start-Sleep 5
+            exit
         }
         catch {
             $errorMessage = $_.Exception
-            Write-Verbose "$logpath folder creation failed because of: $errorMessage"
+            Write-Output "$logpath folder creation failed because of: $errorMessage"
+            Start-Sleep 5
+            exit
         }
     }
 } else {
@@ -257,7 +269,7 @@ try {
     foreach ($dir in $directories) {
         $dirPath = Join-Path -Path $InstallDIR -ChildPath $dir
         if (-not (Test-Path $dirPath)) {
-            New-Item -Path $dirPath -ItemType Directory -ErrorAction Stop
+            New-Item -Path $dirPath -ItemType Directory -Force -ErrorAction Stop
             Write-Output "$dir folder created successfully." 
             Write-Verbose -Message "$($timestamp) $dir folder created successfully."
         } else {
@@ -294,6 +306,13 @@ function CopyFilesToDir {
             }
 
             Copy-Item "$logpath\UNS-Sysmon.xml" -Destination "$InstallDIR\configs\" -ErrorAction Stop
+        }
+        catch [FileNotFoundException] {
+            Write-Output "File not found. Attempting to download again."
+            throw
+            $copySuccessful = $false
+            $retryCount++
+            throw 
         }
         catch {
             Write-Error "Sysmon files copy failed"
@@ -704,7 +723,7 @@ try {
         Write-Output "Something went wrong"
     }
 
-    if (Get-Service -Name "UNSAgent") {
+   <# if (Get-Service -Name "UNSAgent") {
 
         Write-Verbose "Setting update task..."
         # Define the task properties
@@ -732,7 +751,7 @@ try {
             Write-Error "$($timestamp) UNS Agent Update Task creation failed because of $($errorMessage)"
             break
         }
-    }
+    } #>
 }
 catch {
     $errorMessage = $_.Exception
