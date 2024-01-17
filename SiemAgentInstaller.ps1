@@ -88,26 +88,26 @@ function Get-FormattedTimestamp {
 }
 
 $timestamp = Get-FormattedTimestamp
-Write-Verbose -Message "Timestamp is: $timestamp" 
+Write-Verbose -Message "$($timestamp) Timestamp is: $timestamp" 
 
 #Perform spelling check and create logpath folder for all further actions.
-$logpath = $logpath -replace '\\\\+', '\'
-$logpath = $logpath -replace '\\+$', '\'
+[String]$logpath = $logpath -replace '\\\\+', '\'
+[String]$logpath = $logpath -replace '\\+$', '\'
 
 if ($logpath) {
-    $unsfiles = "UNSFiles\"
+    [String]$unsfiles = "UNSFiles\"
     if ($logpath -like "*\") {
 
-        $logpath = $logpath.Trim(), $unsfiles -join ''
-        Write-Verbose "Custom Log Path selected. Log path will be $logpath"
+        [String]$logpath = $logpath.Trim(), $unsfiles -join ''
+        Write-Verbose "$($timestamp) Custom Log Path selected. Log path will be $logpath"
 
     } else {
         
-        $logpath = $logpath.Trim(), "\", $unsfiles -join ''
-        Write-Verbose "Custom Log Path selected. Log path will be $logpath"
+        [String]$logpath = $logpath.Trim(), "\", $unsfiles -join ''
+        Write-Verbose "$($timestamp) Custom Log Path selected. Log path will be $logpath"
     }
     if (Test-Path $logpath) {
-        Write-Verbose "$logpath directory exist."
+        Write-Verbose "$($timestamp) $logpath directory exist."
     } else {
         try {
             New-Item -Path $logpath -ItemType Directory -Force -ErrorAction Stop
@@ -120,13 +120,13 @@ if ($logpath) {
         }
         catch {
             $errorMessage = $_.Exception
-            Write-Output "$logpath folder creation failed because of: $errorMessage"
+            Write-Output "$($timestamp) $logpath folder creation failed because of: $errorMessage"
             Start-Sleep 5
             exit
         }
     }
 } else {
-    $logpath = $env:temp.Trim(), "\UNSFiles\" -join ''
+    [String]$logpath = $env:temp.Trim(), "\UNSFiles\" -join ''
     Write-Verbose -Message "$($timestamp) Default LogPath is: $logpath"
 }
 
@@ -169,7 +169,7 @@ function Remove-ElasticLeftovers {
 				Remove-Item -Path $item -Recurse -Force -ErrorAction SilentlyContinue -Exclude "*.log"
 			} else { Write-Output "" }
 		}
-        Write-Verbose "Leftovers removed"
+        Write-Verbose "$($timestamp) Leftovers removed"
     } else {
     }
 }
@@ -228,7 +228,7 @@ $agentFiles = @(
 )
 $agentPaths = $agentFiles | ForEach-Object { Join-Path $logpath $_ }
 foreach ($i in 0..($agentPaths.Length - 1)) {
-    Write-Verbose "Agent Path at Index $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
+    Write-Verbose "$($timestamp) Agent Path at Index $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
 }
 
 
@@ -244,21 +244,21 @@ function Get-UNSFiles($downloadUrl, $installPath) {
         }
         catch {
             $errorMessage = $_.Exception
-            Write-Error "Failed to download files for following reasons: $errorMessage"
+            Write-Error "$($timestamp) Failed to download files for following reasons: $errorMessage"
             $downloadSuccessful = $false
             $retryCount++
         }
     } while (-not $downloadSuccessful -and $retryCount -lt 3)
 
     if (-not $downloadSuccessful) {
-        Write-Error "Failed to download files after 3 attempts"
+        Write-Error "$($timestamp) Failed to download files after 3 attempts"
         exit
     }
 }
 
 # Download files
 for ($i=0; $i -lt $downloadUrls.Length; $i++) {
-    Write-Verbose "Downloading $($agentPaths[$i])"
+    Write-Verbose "$($timestamp) Downloading $($agentPaths[$i])"
     Get-UNSFiles -downloadUrl $downloadUrls[$i] -installPath $agentPaths[$i]
 }
 
@@ -271,9 +271,9 @@ try {
         if (-not (Test-Path $dirPath)) {
             New-Item -Path $dirPath -ItemType Directory -Force -ErrorAction Stop
             Write-Output "$dir folder created successfully." 
-            Write-Verbose -Message "$($timestamp) $dir folder created successfully."
+            Write-Verbose "$($timestamp) $dir folder created successfully."
         } else {
-            Write-Verbose "$dir directory exists"
+            Write-Verbose "($timestamp) $dir directory exists"
         }
     }
 
@@ -301,7 +301,7 @@ function CopyFilesToDir {
                     $retryCount++
                 }
             } else {
-                Write-Verbose "Sysmon files already exist"
+                Write-Verbose "($timestamp) Sysmon files already exist"
                 $copySuccessful = $true
             }
 
@@ -312,13 +312,13 @@ function CopyFilesToDir {
             catch {
                 Write-Error "Failed to copy UNS-Sysmon.xml"
                 $errorMessage = $_.Exception.Message
-                Write-Error "Error copying UNS-Sysmon.xml because: $errorMessage"
+                Write-Error "($timestamp) Error copying UNS-Sysmon.xml because: $errorMessage"
                 $copySuccessful = $false
                 $retryCount++
             }
         }
         catch [FileNotFoundException] {
-            Write-Output "File not found. Attempting to download again."
+            Write-Output "($timestamp) File not found. Attempting to download again."
             throw
             $copySuccessful = $false
             $retryCount++
@@ -327,14 +327,14 @@ function CopyFilesToDir {
         catch {
             Write-Error "Sysmon files copy failed"
             $errorMessage = $_.Exception.Message
-            Write-Error "Error copying sysmon files because: $errorMessage"
+            Write-Error "($timestamp) Error copying sysmon files because: $errorMessage"
             $copySuccessful = $false
             $retryCount++
         }
     } while (-not $copySuccessful -and $retryCount -lt 3)
 
     if (-not $copySuccessful) {
-        Write-Error "Failed to copy Sysmon files after 3 attempts"
+        Write-Error "($timestamp) Failed to copy Sysmon files after 3 attempts"
         exit
     }
 }
@@ -343,18 +343,18 @@ CopyFilesToDir
 # Set current location to the installation directory
 Set-Location -Path $InstallDIR -ErrorAction Stop
 $currentLocation = Get-Location
-Write-Verbose -Message "Setting working location of $(Get-Location)"
+Write-Verbose -Message "($timestamp) Setting working location of $(Get-Location)"
 
 
 function Uninstall-Sysmon32 {
     param ()
     Write-Output "$($timestamp) Sysmon32 was found, uninstalling" 
-    Write-Verbose -Message "$($timestamp) Sysmon32 was found, uninstalling"
+    Write-Verbose "$($timestamp) Sysmon32 was found, uninstalling"
     try {
         $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon.exe" -ArgumentList "-u force"  -NoNewWindow -PassThru
         $process.WaitForExit()
-        Write-Output  "$($timestamp) Uninstall of Sysmon32 is complete" 
-        Write-Verbose -Message "Uninstall of Sysmon32 is complete."
+        Write-Output  "$($timestamp) Uninstalling Sysmon32 completed" 
+        Write-Verbose "($timestamp) Uninstalling Sysmon32 completed."
         Remove-Item -Path "$InstallDIR\sysmon\Sysmon.exe" -Force -ErrorAction SilentlyContinue
     }
     catch {
@@ -367,7 +367,7 @@ function Uninstall-Sysmon32 {
 # Uninstall Perch
 function Uninstall-Perch {
     param()
-		$arguments = "/X{18B16389-F8F8-4E48-9E78-A043D5742B99}"
+    $arguments = "/X{18B16389-F8F8-4E48-9E78-A043D5742B99}"
         try {
                 Write-Verbose "$timestamp Uninstalling Perch agent"
                 $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "$arguments" -NoNewWindow -PassThru
@@ -405,17 +405,16 @@ function Set-Sysmon64 {
             Write-Output  "$($timestamp) Sysmon64 is running. Setting the configuration for Sysmon64." 
             $process = Start-Process -FilePath "$InstallDIR\sysmon\sysmon64.exe" -ArgumentList "-c `"$InstallDIR\configs\UNS-Sysmon.xml`"" -NoNewWindow -PassThru
             $process.WaitForExit()
-            Write-Output  "$($timestamp) Configuration of Sysmon64 is complete" 
-            Write-Verbose -Message "$($timestamp) Configuration of Sysmon64 is complete"
+            Write-Output "$($timestamp) Configuration of Sysmon64 is complete" 
+            Write-Verbose "$($timestamp) Configuration of Sysmon64 is complete"
         }
         catch {
             $errorMessage = $_.Exception.Message
             Write-Error "$($timestamp) Error while setting Sysmon64 config: $errorMessage"
-            #Invoke-SendSlack -errorMessage $errorMessage
         }
     } else {
         Write-Error "$($timestamp) Sysmon64 was not found on the system" 
-        Write-Verbose -Message "$($timestamp) Sysmon64 was not found on the system"
+        Write-Verbose "$($timestamp) Sysmon64 was not found on the system"
         exit
     }
 }
@@ -438,6 +437,9 @@ function Wait-Service {
 
 # Function to popup token form
 function Show-TokenForm {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
     # Create a form
     $form = New-Object Windows.Forms.Form
     $form.Text = 'UNS Elastic'
@@ -460,7 +462,7 @@ function Show-TokenForm {
     $form.Controls.Add($logoBox)
 
     if ($token) {
-        Write-Verbose "Token already provided"
+        Write-Verbose "($timestamp) Token already provided"
     } else {
     # Create a label for primary input
     $label = New-Object Windows.Forms.Label
@@ -476,7 +478,7 @@ function Show-TokenForm {
     $form.Controls.Add($textBox)
     }
     if ($fleetURL) {
-        Write-Verbose "fLeetURL already provided"
+        Write-Verbose "($timestamp) fLeetURL already provided"
     } else {
     # Create a label for secondary input
     $label2 = New-Object Windows.Forms.Label
@@ -528,21 +530,22 @@ function Install-ElasticAgent {
     param (
     )
         try {
-			Write-Output "$timestamp : Downloading and installing elastic agent."
+			Write-Output "$timestamp Downloading and installing elastic agent."
 
             Start-Sleep -Milliseconds 500
 
                 #Unzipping files
+                Write-Verbose "($timestamp) Unzipping agent files, it will take few seconds..."
                 try {
                     # Try unzipping the files
-                    Write-Verbose "LogPath is: $logpath"
+                    Write-Verbose "($timestamp) LogPath is: $logpath"
                     $archiveFile = $logpath.Trim() + $agentFiles[2].Trim()
-                    Write-Verbose "Archive file is $archiveFile"
+                    Write-Verbose "($timestamp) rchive file is $archiveFile"
                     Expand-Archive $archiveFile -DestinationPath $logpath -Force -ErrorAction Stop
                     $agentinstallPath = $logpath.Trim() + (Get-Item -Path $logpath\elastic-agent-*).Name
                     
                     Start-Sleep -Milliseconds 500
-                    Write-Verbose "All files were unzipped, installing agent..."
+                    Write-Verbose "($timestamp) All files were unzipped, installing agent..."
                 }
                 catch {
                     $errorMessage = $_.Exception
@@ -551,32 +554,32 @@ function Install-ElasticAgent {
                 }
                 
                 # Checking if tokens and URL is provided and triggering token Form
-                Write-Verbose "Starting Fleet and Token procedures."
+                Write-Verbose "($timestamp) Starting Fleet and Token procedures."
                 Start-Sleep -Milliseconds 300
                 if (($fleetURL) -and (-not $token)) {
-                    Write-Verbose "Fleet URL is already provided: $fleetURL"
-                    Write-Verbose "Missing token. Initiating form input."
+                    Write-Verbose "($timestamp) Fleet URL is already provided: $fleetURL"
+                    Write-Verbose "($timestamp) Missing token. Initiating form input."
                     $token = Show-TokenForm
                     if (($null -eq $token) -or ($token.Length -lt 30)) {
                         Write-Error "$($timestamp): Token is empty or too short. Seems that the user cancelled the input or did not provided required value" -ErrorAction Stop
                         exit
                     }
                 } elseif (($token) -and (-not $fleetURL)) {
-                    Write-Verbose "Token is already provided: $token"
-                    Write-Verbose "Missing FleetURL. Initiating form input."
+                    Write-Verbose "($timestamp) Token is already provided: $token"
+                    Write-Verbose "($timestamp) Missing FleetURL. Initiating form input."
                     $fleetURL = Show-TokenForm
                     if (($null -eq $fleetURL) -or ($fleetURL.Length -lt 30)) {
                         Write-Error "$($timestamp): fleetURL is empty or too short. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
                         exit
                     }
-                    Write-Verbose "FleetURL provided: $fleetURL"
+                    Write-Verbose "($timestamp) FleetURL provided: $fleetURL"
 
                 } else {
                     $tokenVars = Show-TokenForm
                     $token = $tokenVars[0]
                     $fleetURL = $tokenVars[1]
                     if (($null -ne $token) -or ($null -ne $fleetURL)) {
-                        Write-Verbose "Tokens were provided"
+                        Write-Verbose "($timestamp) Tokens were provided"
                     } else {
                         Write-Error "$($timestamp): fleetURL or token is empty. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
                     }
@@ -592,13 +595,13 @@ function Install-ElasticAgent {
             
             # additional check if token was provided and value is not null
             if ($null -eq $token) {
-                Write-Verbose "Token issues after token forms"
+                Write-Verbose "($timestamp) Token issues after token forms"
                 exit
 
             } else {
                 # installing elastic services
                 try {
-                    Write-Verbose "Installing ElasticSIEM Agent..."
+                    Write-Verbose "($timestamp) Installing ElasticSIEM Agent..."
                 # Insalling UNS SIEM Agent
                 $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
                 $process.WaitForExit()
@@ -616,11 +619,12 @@ function Install-ElasticAgent {
                 if (Get-Service -ServiceName "Elastic Agent") {
                     try {
                         #Rename elastic service:
-                        Write-Verbose "Services operations started:"
+                        Write-Verbose "$($timestamp) Services operations started:"
                         Start-Sleep -Milliseconds 500
+                        Write-Verbose "$($timestamp) Stopping elastic agent service"
                         try {
-                            Write-Verbose "Stopping elastic agent service"
                             Stop-Service -ServiceName "Elastic Agent" -ErrorAction Stop 
+                            Write-Verbose "$($timestamp) Elastic agent service stopped"
                         }
                         catch {
                             $errorMessage = $_.Exception
@@ -628,11 +632,13 @@ function Install-ElasticAgent {
                         }
                         #set service displayname and description
                         Start-Sleep -Milliseconds 500
-                        Write-Verbose "Renaming elastic agent service name"
+                        Write-Verbose "$($timestamp) Renaming elastic agent service name"
                         try {
 
                             Set-Service -ServiceName "Elastic Agent" -DisplayName "UNS SIEM Agent" -ErrorAction Stop
                             Set-Service -ServiceName "Elastic Agent" -Description "UNS SIEM Agent is a unified agent to observe, monitor and protect your system."
+                            Write-Verbose "$($timestamp) Elastic agent service renamed to UNS SIEM Agent"
+                            Write-Verbose "$($timestamp) UNS SIEM Agent service description changed"
 
                         }
                         catch {
@@ -644,9 +650,10 @@ function Install-ElasticAgent {
                         #Moving agent files to Program Files
                         $source = $env:programfiles.Trim() + "\Elastic\Agent".Trim()
                         $destination = $env:programfiles.Trim() + "\UNS SIEM Agent\agent".Trim()
-                        $agentfiles = Get-ChildItem $source -Recurse -ErrorAction SilentlyContinue | ForEach-Object {$_.FullName}
+                        Write-Verbose "$($timestamp) Moving files from $source to $destination"
                         try {
-                            foreach ($file in $agentfiles) {Move-Item -Path $file -Destination $destination -ErrorAction SilentlyContinue}
+                            Move-Item -Path $source -Destination $destination -Force
+                            Write-Verbose "$($timestamp) Agent files moved successfully"
                         }
                         catch {
                             $errorMessage = $_.Exception
@@ -655,8 +662,10 @@ function Install-ElasticAgent {
                         }
 
                         #assuming everything went through, lets modify service binPath
+                        Write-Verbose "$($timestamp) modifying UNS SIEM Agent binPath via sc.exe"
                         try {
                             sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
+                            Write-Verbose "$($timestamp) binPath modified successfully"
                         }
                         catch {
                             $errorMessage = $_.Exception
@@ -664,17 +673,19 @@ function Install-ElasticAgent {
                         }
 
                         #Atetmpting to start uns siem agent
-                        Write-Verbose "Attempting to start new service"
+                        Write-Verbose "$($timestamp)  Attempting to start UNS SIEM Agent Service"
                         try {
                             Start-Service -ServiceName "Elastic Agent"
+                            Write-Verbose "$($timestamp)  Service started successfully"
                         }
                         catch {
                             $errorMessage = $_.Exception
                             Write-Output $errorMessage
                         }
                         Wait-Service -serviceName "Elastic Agent" -status "Running"
+                        
                         if ((Get-Service -ServiceName "Elastic Agent").Status -eq "Running") {
-                            Write-Verbose "'UNS SIEM Agent' service, successfully started."
+                            Write-Verbose "$($timestamp) Everythng looks good, continue."
                         }
     
                     }
