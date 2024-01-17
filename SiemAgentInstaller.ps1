@@ -644,7 +644,7 @@ function Install-ElasticAgent {
 
                         #Moving agent files to Program Files
                         $source = $env:programfiles.Trim() + "\Elastic\Agent".Trim()
-                        $destination = $env:programfiles.Trim() + "\UNS SIEM Agent\agent".Trim()
+                        $destination = $env:programfiles.Trim() + "\UNS SIEM Agent\".Trim()
                         Write-Verbose "$(Get-FormattedDate) Moving files from $source to $destination"
                         try {
                             Move-Item -Path $source -Destination $destination -Force
