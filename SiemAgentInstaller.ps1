@@ -644,7 +644,7 @@ function Install-ElasticAgent {
 
                         #Moving agent files to Program Files
                         $source = $env:programfiles.Trim() + "\Elastic\Agent".Trim()
-                        $destination = $env:programfiles.Trim() + "\UNS SIEM Agent\agent".Trim()
+                        $destination = $env:programfiles.Trim() + "\UNS SIEM Agent\".Trim()
                         Write-Verbose "$(Get-FormattedDate) Moving files from $source to $destination"
                         try {
                             Move-Item -Path $source -Destination $destination -Force
@@ -667,8 +667,8 @@ function Install-ElasticAgent {
                         # Get the file within the dynamic folder
                         $agentfile = Get-ChildItem -Path $dynamicFolder.FullName -Recurse -File | Where-Object { $_.Name -eq $agentname }
                         $agentfile.FullName
-
-                        New-Item -ItemType SymbolicLink -Path $InstallDIR\agent\elastic-agent.exe -Target $agentfile.FullName
+                        Remove-Item -Path $InstallDIR\agent\elastic-agent.exe -Force
+                        New-Item -ItemType SymbolicLink -Path $InstallDIR\agent\elastic-agent.exe -Target $agentfile.FullName -Force
 
                         try {
                             sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
