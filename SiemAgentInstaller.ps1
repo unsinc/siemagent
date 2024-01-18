@@ -567,7 +567,7 @@ function Install-ElasticAgent {
                 catch {
                     $errorMessage = $_.Exception
                     Write-Error "$(Get-FormattedDate) Agent files copy failed because of $($errorMessage)" -ErrorAction Stop
-                    exit
+                    break
                 }
                 
                 # Checking if tokens and URL is provided and triggering token Form LOGIC NEED FIX
@@ -581,7 +581,6 @@ function Install-ElasticAgent {
                     $token = Show-TokenForm
                     if (($null -eq $token) -or ($token.Length -lt 30)) {
                         Write-Error "$(Get-FormattedDate): Token is empty or too short. Seems that the user cancelled the input or did not provided required value" -ErrorAction Stop
-                        exit
                     }
                 } elseif (($token) -and (-not $fleetURL)) {
                     Write-Verbose "$(Get-FormattedDate) Token is already provided: $token"
@@ -589,7 +588,6 @@ function Install-ElasticAgent {
                     $fleetURL = Show-TokenForm
                     if (($null -eq $fleetURL) -or ($fleetURL.Length -lt 30)) {
                         Write-Error "$(Get-FormattedDate): fleetURL is empty or too short. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
-                        exit
                     }
                     Write-Verbose "$(Get-FormattedDate) FleetURL provided: $fleetURL"
 
@@ -710,9 +708,10 @@ function Install-ElasticAgent {
                         Write-Verbose "$(Get-FormattedDate) modifying UNS SIEM Agent binPath via sc.exe"
 
                         #change binPath for the new service
+                        $newAgentPAth = $destination + "agent\elastic-agent.exe"
                         Write-Verbose "$(Get-FormattedDate) Changing binPath for UNS SIEM Agent"
                         try {
-                            sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
+                            sc.exe config "Elastic Agent" binPath= $newAgentPAth
                         }
                         catch {
                             $errorMessage = $_.Exception
