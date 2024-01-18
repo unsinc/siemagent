@@ -508,7 +508,7 @@ function Install-ElasticAgent {
     param (
     )
         try {
-			Write-Output "$(Get-FormattedDate) Downloading and installing elastic agent."
+			Write-Verbose "$(Get-FormattedDate) Downloading and installing UNS SIEM Agent."
 
             Start-Sleep -Milliseconds 500
 
@@ -568,8 +568,8 @@ function Install-ElasticAgent {
             $arguments += " --enrollment-token=$token"
                 
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
-            Write-Verbose -Message "$(Get-FormattedDate) Elastic fleet URL: $fleetURL"
-            Write-Verbose -Message "$(Get-FormattedDate) Elastic enrollment token: $token"
+            Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
+            Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
             
             # additional check if token was provided and value is not null
             if ($null -eq $token) {
@@ -579,20 +579,22 @@ function Install-ElasticAgent {
             } else {
                 # installing elastic services
                 try {
-                    Write-Verbose "$(Get-FormattedDate) Installing ElasticSIEM Agent..."
+                    Write-Verbose "$(Get-FormattedDate) Installing UNS SIEM Agent..."
                 # Insalling UNS SIEM Agent
                 $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
                 $process.WaitForExit()
-                
-                Write-Verbose -Message "$(Get-FormattedDate) Elastic Agent has been installed."
-                Start-Sleep -Milliseconds 3
+                    # Check the exit code
+                    if ($process.ExitCode -ne 0) {
+                        throw "Installation failed with exit code $($process.ExitCode)"
+                    }
                 }
                 catch {
                     $errorMessage = $_.Exception
                     Write-Output "$(Get-FormattedDate) Installation failed because of $($errorMessage)"
                     exit
                 }
-
+                Write-Verbose -Message "$(Get-FormattedDate) Elastic Agent has been installed."
+                
                 #modifying services
                 if (Get-Service -ServiceName "Elastic Agent") {
                     try {
@@ -662,6 +664,17 @@ function Install-ElasticAgent {
 
                         #assuming everything went through, lets modify service binPath
                         Write-Verbose "$(Get-FormattedDate) modifying UNS SIEM Agent binPath via sc.exe"
+
+                        #change binPath for the new service
+                        Write-Verbose "$(Get-FormattedDate) Changing binPath for UNS SIEM Agent"
+                        try {
+                            sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
+                        }
+                        catch {
+                            $errorMessage = $_.Exception
+                            Write-Error $errorMessage -ErrorAction Stop
+                        }
+                        Write-Verbose "$(Get-FormattedDate) binPath modified successfully"
                         
                         # Define the base directory
                         $baseDirectory = "C:\Program Files\UNS SIEM Agent\Agent\data"
@@ -681,16 +694,6 @@ function Install-ElasticAgent {
                         #create up-to-date symlink
                         New-Item -ItemType SymbolicLink -Path $InstallDIR\agent\elastic-agent.exe -Target $agentfile.FullName -Force
 
-                        #change binPath for the new service
-                        Write-Verbose "$(Get-FormattedDate) Changing binPath for UNS SIEM Agent"
-                        try {
-                            sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
-                        }
-                        catch {
-                            $errorMessage = $_.Exception
-                            Write-Error $errorMessage -ErrorAction Stop
-                        }
-                        Write-Verbose "$(Get-FormattedDate) binPath modified successfully"
 
                         #Atetmpting to start uns siem agent
                         Write-Verbose "$(Get-FormattedDate)  Attempting to start UNS SIEM Agent Service"
