@@ -346,6 +346,7 @@ function Uninstall-Sysmon32 {
     Write-Verbose "$(Get-FormattedDate) Sysmon32 was found, uninstalling"
     try {
         $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon.exe" -ArgumentList "-u force"  -NoNewWindow -PassThru
+        $handle = $process.Handle  # Cache the process handle
         $process.WaitForExit()
             # Check the exit code
             if ($process.ExitCode -ne 0) {
@@ -370,6 +371,7 @@ function Uninstall-Perch {
         try {
             Write-Verbose "$timestamp Uninstalling Perch agent"
             $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "$arguments" -NoNewWindow -PassThru
+            $handle = $process.Handle  # Cache the process handle
             $process.WaitForExit()
 
             # Check the exit code
@@ -392,6 +394,7 @@ function Install-Sysmon64 {
     Write-Output "$(Get-FormattedDate) Installing Sysmon64" 
     try {
         $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon64.exe" -ArgumentList "-accepteula -i" -NoNewWindow -PassThru
+        $handle = $process.Handle  # Cache the process handle
         $process.WaitForExit()
 
         # Check the exit code
@@ -418,6 +421,7 @@ function Set-Sysmon64 {
         try {
             Write-Output  "$(Get-FormattedDate) Sysmon64 is running. Setting the configuration for Sysmon64." 
             $process = Start-Process -FilePath "$InstallDIR\sysmon\sysmon64.exe" -ArgumentList "-c `"$InstallDIR\configs\UNS-Sysmon.xml`"" -NoNewWindow -PassThru
+            $handle = $process.Handle  # Cache the process handle
             $process.WaitForExit()
 
             # Check the exit code
@@ -609,6 +613,7 @@ function Install-ElasticAgent {
                     Write-Verbose "$(Get-FormattedDate) Installing UNS SIEM Agent..."
                 # Insalling UNS SIEM Agent
                 $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
+                $handle = $process.Handle  # Cache the process handle
                 $process.WaitForExit()
                     # Check the exit code
                     if ($process.ExitCode -ne 0) {
@@ -706,7 +711,7 @@ function Install-ElasticAgent {
                         Write-Verbose "$(Get-FormattedDate) binPath modified successfully"
                         
                         # Define the base directory
-                        $baseDirectory = "C:\Program Files\UNS SIEM Agent\Agent\data"
+                        $baseDirectory = $destination + "Agent\data"
                         
                         # Get the dynamic folder
                         $dynamicFolder = Get-ChildItem -Path $baseDirectory | Where-Object { $_.PSIsContainer } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
