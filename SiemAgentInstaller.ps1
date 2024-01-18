@@ -645,6 +645,7 @@ function Install-ElasticAgent {
                         Start-Sleep -Milliseconds 500
                         Write-Verbose "$(Get-FormattedDate) Stopping elastic agent service"
                         try {
+                            # stopping the agent
                             Stop-Service -ServiceName "Elastic Agent" -ErrorAction Stop 
                             
                         }
@@ -654,8 +655,8 @@ function Install-ElasticAgent {
                             exit
                         }
                         Write-Verbose "$(Get-FormattedDate) Elastic agent service stopped."
-                        Start-Sleep -Milliseconds 500
                         
+                        Start-Sleep -Milliseconds 500
                         #set service displayname and description
                         Write-Verbose "$(Get-FormattedDate) Renaming elastic agent service name"
                         try {
@@ -674,75 +675,6 @@ function Install-ElasticAgent {
                         Write-Verbose "$(Get-FormattedDate) UNS SIEM Agent service description changed"
                         
                         Start-Sleep -Milliseconds 500
-
-                        #Moving agent files to Program Files
-                        $source = $env:programfiles.Trim() + "\Elastic\Agent".Trim()
-                        $destination = $env:programfiles.Trim() + "\UNS SIEM Agent\".Trim()
-                        Write-Verbose "$(Get-FormattedDate) Moving files from $source to $destination"
-                        # test if path exist before operations
-                        if (Test-Path $destination\agent) {
-                            Write-Verbose "$(Get-FormattedDate) Stopping services and deleting the folder first"
-                            try {
-                                #if exist stop services and remove the folder
-                                Stop-Service -ServiceName "Elastic Agent"
-                                Remove-Item $destination\agent -Force -Recurse
-                            }
-                            catch {
-                                $errorMessage = $_.Exception
-                                Write-Error $errorMessage -ErrorAction Stop
-                                exit
-                            }
-                            Write-Verbose "$(Get-FormattedDate) agent folder deleted successfully "
-                        } else {
-                            try {
-                                #if does not exist, continue and move the agent folder.
-                                Move-Item -Path $source -Destination $destination -Force
-                            }
-                            catch {
-                                $errorMessage = $_.Exception
-                                Write-Error $errorMessage -ErrorAction Stop
-                                Remove-Item -Path $destination\Agent -Recurse -Force -ErrorAction SilentlyContinue
-                                exit
-                            }
-                            Write-Verbose "$(Get-FormattedDate) Agent files moved successfully"
-                        }
-                        Start-Sleep -Milliseconds 500
-
-                        #assuming everything went through, lets modify service binPath
-                        Write-Verbose "$(Get-FormattedDate) modifying UNS SIEM Agent binPath via sc.exe"
-
-                        #change binPath for the new service
-                        $newAgentPAth = $destination + "agent\elastic-agent.exe"
-                        Write-Verbose "$(Get-FormattedDate) Changing binPath for UNS SIEM Agent"
-                        try {
-                            sc.exe config "Elastic Agent" binPath= $newAgentPAth
-                        }
-                        catch {
-                            $errorMessage = $_.Exception
-                            Write-Error $errorMessage -ErrorAction Stop
-                            exit
-                        }
-                        Write-Verbose "$(Get-FormattedDate) binPath modified successfully"
-                        
-                        # Define the base directory
-                        $baseDirectory = $destination + "Agent\data"
-                        
-                        # Get the dynamic folder
-                        $dynamicFolder = Get-ChildItem -Path $baseDirectory | Where-Object { $_.PSIsContainer } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                        
-                        # Define the file you want to get
-                        $agentname = "elastic-agent.exe"
-                        
-                        # Get the file within the dynamic folder
-                        $agentfile = Get-ChildItem -Path $dynamicFolder.FullName -Recurse -File | Where-Object { $_.Name -eq $agentname }
-                        $agentfile.FullName
-                        
-                        #remove old symlink
-                        Remove-Item -Path $InstallDIR\agent\elastic-agent.exe -Force
-                        #create up-to-date symlink
-                        New-Item -ItemType SymbolicLink -Path $InstallDIR\agent\elastic-agent.exe -Target $agentfile.FullName -Force
-
-
                         #Atetmpting to start uns siem agent
                         Write-Verbose "$(Get-FormattedDate)  Attempting to start UNS SIEM Agent Service"
                         try {
