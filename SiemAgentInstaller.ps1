@@ -414,22 +414,6 @@ function Set-Sysmon64 {
     }
 }
 
-#Execute next piece only if service is in "Running" State
-function Wait-Service {
-    param (
-        [Parameter(Mandatory=$true)]
-        [string]$serviceName,
-        [Parameter(Mandatory=$true)]
-        [string]$status
-    )
-
-    $service = Get-Service -Name $serviceName
-    while ($service.Status -ne $status) {
-        Start-Sleep -Seconds 1
-        $service.Refresh()
-    }
-}
-
 # Function to popup token form
 function Show-TokenForm {
     Add-Type -AssemblyName System.Windows.Forms
@@ -619,27 +603,31 @@ function Install-ElasticAgent {
                         Write-Verbose "$(Get-FormattedDate) Stopping elastic agent service"
                         try {
                             Stop-Service -ServiceName "Elastic Agent" -ErrorAction Stop 
-                            Write-Verbose "$(Get-FormattedDate) Elastic agent service stopped"
+                            
                         }
                         catch {
                             $errorMessage = $_.Exception
                             Write-Error $errorMessage -ErrorAction Stop
                         }
-                        #set service displayname and description
+                        Write-Verbose "$(Get-FormattedDate) Elastic agent service stopped."
                         Start-Sleep -Milliseconds 500
+                        
+                        #set service displayname and description
                         Write-Verbose "$(Get-FormattedDate) Renaming elastic agent service name"
                         try {
 
                             Set-Service -ServiceName "Elastic Agent" -DisplayName "UNS SIEM Agent" -ErrorAction Stop
                             Set-Service -ServiceName "Elastic Agent" -Description "UNS SIEM Agent is a unified agent to observe, monitor and protect your system."
-                            Write-Verbose "$(Get-FormattedDate) Elastic agent service renamed to UNS SIEM Agent"
-                            Write-Verbose "$(Get-FormattedDate) UNS SIEM Agent service description changed"
 
                         }
+
                         catch {
                             $errorMessage = $_.Exception
                             Write-Error $errorMessage -ErrorAction Stop
                         }
+                        Write-Verbose "$(Get-FormattedDate) Elastic agent service renamed to UNS SIEM Agent"
+                        Write-Verbose "$(Get-FormattedDate) UNS SIEM Agent service description changed"
+                        
                         Start-Sleep -Milliseconds 500
 
                         #Moving agent files to Program Files
@@ -648,18 +636,19 @@ function Install-ElasticAgent {
                         Write-Verbose "$(Get-FormattedDate) Moving files from $source to $destination"
                         try {
                             Move-Item -Path $source -Destination $destination -Force
-                            Write-Verbose "$(Get-FormattedDate) Agent files moved successfully"
                         }
                         catch {
                             $errorMessage = $_.Exception
                             Write-Error $errorMessage -ErrorAction Stop
-                            
+                            Remove-Item -Path $destination\Agent -Recurse -Force -ErrorAction SilentlyContinue
                         }
+                        Write-Verbose "$(Get-FormattedDate) Agent files moved successfully"
+                        Start-Sleep -Milliseconds 500
 
                         #assuming everything went through, lets modify service binPath
                         Write-Verbose "$(Get-FormattedDate) modifying UNS SIEM Agent binPath via sc.exe"
                         # Define the base directory
-                        $baseDirectory = "C:\Program Files\UNS SIEM Agent\agent\Agent\data"
+                        $baseDirectory = "C:\Program Files\UNS SIEM Agent\Agent\data"
                         # Get the dynamic folder
                         $dynamicFolder = Get-ChildItem -Path $baseDirectory | Where-Object { $_.PSIsContainer } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
                         # Define the file you want to get
@@ -672,28 +661,23 @@ function Install-ElasticAgent {
 
                         try {
                             sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
-                            Write-Verbose "$(Get-FormattedDate) binPath modified successfully"
                         }
                         catch {
                             $errorMessage = $_.Exception
                             Write-Error $errorMessage -ErrorAction Stop
                         }
+                        Write-Verbose "$(Get-FormattedDate) binPath modified successfully"
 
                         #Atetmpting to start uns siem agent
                         Write-Verbose "$(Get-FormattedDate)  Attempting to start UNS SIEM Agent Service"
                         try {
                             Start-Service -ServiceName "Elastic Agent"
-                            Write-Verbose "$(Get-FormattedDate)  Service started successfully"
                         }
                         catch {
                             $errorMessage = $_.Exception
                             Write-Output $errorMessage
                         }
-                        Wait-Service -serviceName "Elastic Agent" -status "Running"
-                        
-                        if ((Get-Service -ServiceName "Elastic Agent").Status -eq "Running") {
-                            Write-Verbose "$(Get-FormattedDate) Everythng looks good, continue."
-                        }
+                        Write-Verbose "$(Get-FormattedDate)  Service started successfully"
     
                     }
                     catch {
