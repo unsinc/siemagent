@@ -420,7 +420,7 @@ function Show-TokenForm {
 
     # Create a form
     $form = New-Object Windows.Forms.Form
-    $form.Text = 'UNS Elastic'
+    $form.Text = 'UNS SIEM Agent'
     $form.Size = New-Object Drawing.Size @(350, 230)
     $form.StartPosition = 'CenterScreen'
     # Set FormBorderStyle to FixedDialog
