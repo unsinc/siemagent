@@ -362,7 +362,7 @@ function Uninstall-Sysmon32 {
         Write-Error "$(Get-FormattedDate) Error while uninstalling Sysmon32: $errorMessage"
         exit
     }
-    #destroy the handle
+    #destroy the handle cache
     $null = $handle
 }
 
@@ -388,7 +388,7 @@ function Uninstall-Perch {
                 Write-Error "$(Get-FormattedDate) Error while uninstalling Sysmon32: $errorMessage"
                 exit
             }
-            #destroy the handle
+            #destroy the handle cache
             $null = $handle
 }
 
@@ -414,7 +414,7 @@ function Install-Sysmon64 {
         $errorMessage = $_.Exception.Message
         Write-Error "$(Get-FormattedDate) Error while installing Sysmon64: $errorMessage"
     }
-    #destroy the handle
+    #destroy the handle cache
     $null = $handle
 
 }
@@ -442,7 +442,7 @@ function Set-Sysmon64 {
             $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) Error while setting Sysmon64 config: $errorMessage"
         }
-        #destroy the handle
+        #destroy the handle cache
         $null = $handle 
 
     } else {
@@ -570,10 +570,12 @@ function Install-ElasticAgent {
                     exit
                 }
                 
-                # Checking if tokens and URL is provided and triggering token Form
+                # Checking if tokens and URL is provided and triggering token Form LOGIC NEED FIX
                 Write-Verbose "$(Get-FormattedDate) Starting Fleet and Token procedures."
                 Start-Sleep -Milliseconds 300
-                if (($fleetURL) -and (-not $token)) {
+                if ($token -and $fleetURL) {
+                    Write-Verbose "$(Get-FormattedDate) Token and fleetURL already provided"
+                } elseif (($fleetURL) -and (-not $token)) {
                     Write-Verbose "$(Get-FormattedDate) Fleet URL is already provided: $fleetURL"
                     Write-Verbose "$(Get-FormattedDate) Missing token. Initiating form input."
                     $token = Show-TokenForm
@@ -635,7 +637,7 @@ function Install-ElasticAgent {
                     Write-Output "$(Get-FormattedDate) Installation failed because of $($errorMessage)"
                     exit
                 }
-                # destroying the process handle
+                # destroy the handle cache
                 $null = $handle
                 #modifying services
                 if (Get-Service -ServiceName "Elastic Agent") {
