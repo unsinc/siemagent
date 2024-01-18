@@ -222,7 +222,7 @@ $agentFiles = @(
 )
 $agentPaths = $agentFiles | ForEach-Object { Join-Path $logpath $_ }
 foreach ($i in 0..($agentPaths.Length - 1)) {
-    Write-Verbose "$(Get-FormattedDate) Agent Path at Index $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
+    Write-Verbose "$(Get-FormattedDate) Agent Path $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
 }
 
 
