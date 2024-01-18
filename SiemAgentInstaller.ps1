@@ -159,13 +159,12 @@ function Remove-ElasticLeftovers {
     if (Test-Path -Path $path) {
         $items = Get-ChildItem $path -Exclude *.log -Depth 3 -Recurse
 		foreach ($item in $items) {
-			if (Test-Path $item -PathType Leaf) {
-                Write-Debug "Removing $item."
+			if (Test-Path $item -PathType Any) {
+                Write-Debug "$(Get-FormattedDate) Removing $item."
 				Remove-Item -Path $item -Recurse -Force -ErrorAction SilentlyContinue -Exclude "*.log"
-			} else { Write-Output "" }
+			}
 		}
         Write-Verbose "$(Get-FormattedDate) Leftovers removed"
-    } else {
     }
 }
 
@@ -223,7 +222,7 @@ $agentFiles = @(
 )
 $agentPaths = $agentFiles | ForEach-Object { Join-Path $logpath $_ }
 foreach ($i in 0..($agentPaths.Length - 1)) {
-    Write-Verbose "$(Get-FormattedDate) Agent Path at Index $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
+    Write-Verbose "$(Get-FormattedDate) Agent Path $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
 }
 
 
@@ -348,9 +347,14 @@ function Uninstall-Sysmon32 {
     try {
         $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon.exe" -ArgumentList "-u force"  -NoNewWindow -PassThru
         $process.WaitForExit()
-        Write-Output  "$(Get-FormattedDate) Uninstalling Sysmon32 completed" 
-        Write-Verbose "$(Get-FormattedDate) Uninstalling Sysmon32 completed."
-        Remove-Item -Path "$InstallDIR\sysmon\Sysmon.exe" -Force -ErrorAction SilentlyContinue
+            # Check the exit code
+            if ($process.ExitCode -ne 0) {
+                throw "Installation failed with exit code $($process.ExitCode)"
+            } else {
+                Write-Output  "$(Get-FormattedDate) Uninstalling Sysmon32 completed" 
+                Write-Verbose "$(Get-FormattedDate) Uninstalling Sysmon32 completed."
+                Remove-Item -Path "$InstallDIR\sysmon\Sysmon.exe" -Force -ErrorAction SilentlyContinue
+            }
     }
     catch {
         $errorMessage = $_.Exception.Message
@@ -364,10 +368,18 @@ function Uninstall-Perch {
     param()
     $arguments = "/X{18B16389-F8F8-4E48-9E78-A043D5742B99}"
         try {
-                Write-Verbose "$timestamp Uninstalling Perch agent"
-                $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "$arguments" -NoNewWindow -PassThru
-                $process.WaitForExit()
-            } catch {
+            Write-Verbose "$timestamp Uninstalling Perch agent"
+            $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "$arguments" -NoNewWindow -PassThru
+            $process.WaitForExit()
+
+            # Check the exit code
+            if ($process.ExitCode -ne 0) {
+                throw "Installation failed with exit code $($process.ExitCode)"
+            } else {
+                Write-Verbose "$(Get-FormattedDate) Perch uninstall completed."
+            }
+
+        } catch {
                 $errorMessage = $_.Exception.Message
                 Write-Error "$(Get-FormattedDate) Error while uninstalling Sysmon32: $errorMessage"
                 exit
@@ -381,14 +393,21 @@ function Install-Sysmon64 {
     try {
         $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon64.exe" -ArgumentList "-accepteula -i" -NoNewWindow -PassThru
         $process.WaitForExit()
-        Write-Output "$(Get-FormattedDate) Installation of Sysmon64 is complete" 
-        Write-Verbose -Message "Installation of Sysmon64 is complete"
+
+        # Check the exit code
+        if ($process.ExitCode -ne 0) {
+            throw "Installation failed with exit code $($process.ExitCode)"
+        } else {
+            Write-Output "$(Get-FormattedDate) Installation of Sysmon64 is complete" 
+            Write-Verbose "$(Get-FormattedDate) Installation of Sysmon64 is complete"
+        }
+
     }
     catch {
         $errorMessage = $_.Exception.Message
         Write-Error "$(Get-FormattedDate) Error while installing Sysmon64: $errorMessage"
-        #Invoke-SendSlack -errorMessage $errorMessage
     }
+
 }
 
 # Function to configure running Sysmon64
@@ -400,13 +419,20 @@ function Set-Sysmon64 {
             Write-Output  "$(Get-FormattedDate) Sysmon64 is running. Setting the configuration for Sysmon64." 
             $process = Start-Process -FilePath "$InstallDIR\sysmon\sysmon64.exe" -ArgumentList "-c `"$InstallDIR\configs\UNS-Sysmon.xml`"" -NoNewWindow -PassThru
             $process.WaitForExit()
-            Write-Output "$(Get-FormattedDate) Configuration of Sysmon64 is complete" 
-            Write-Verbose "$(Get-FormattedDate) Configuration of Sysmon64 is complete"
+
+            # Check the exit code
+            if ($process.ExitCode -ne 0) {
+                throw "Installation failed with exit code $($process.ExitCode)"
+            } else {
+                Write-Output "$(Get-FormattedDate) Configuration of Sysmon64 is complete" 
+                Write-Verbose "$(Get-FormattedDate) Configuration of Sysmon64 is complete"
+            }
         }
         catch {
             $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) Error while setting Sysmon64 config: $errorMessage"
         }
+
     } else {
         Write-Error "$(Get-FormattedDate) Sysmon64 was not found on the system" 
         Write-Verbose "$(Get-FormattedDate) Sysmon64 was not found on the system"
@@ -421,7 +447,7 @@ function Show-TokenForm {
 
     # Create a form
     $form = New-Object Windows.Forms.Form
-    $form.Text = 'UNS Elastic'
+    $form.Text = 'UNS SIEM Agent'
     $form.Size = New-Object Drawing.Size @(350, 230)
     $form.StartPosition = 'CenterScreen'
     # Set FormBorderStyle to FixedDialog
@@ -509,7 +535,7 @@ function Install-ElasticAgent {
     param (
     )
         try {
-			Write-Output "$(Get-FormattedDate) Downloading and installing elastic agent."
+			Write-Verbose "$(Get-FormattedDate) Downloading and installing UNS SIEM Agent."
 
             Start-Sleep -Milliseconds 500
 
@@ -569,8 +595,8 @@ function Install-ElasticAgent {
             $arguments += " --enrollment-token=$token"
                 
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
-            Write-Verbose -Message "$(Get-FormattedDate) Elastic fleet URL: $fleetURL"
-            Write-Verbose -Message "$(Get-FormattedDate) Elastic enrollment token: $token"
+            Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
+            Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
             
             # additional check if token was provided and value is not null
             if ($null -eq $token) {
@@ -580,20 +606,24 @@ function Install-ElasticAgent {
             } else {
                 # installing elastic services
                 try {
-                    Write-Verbose "$(Get-FormattedDate) Installing ElasticSIEM Agent..."
+                    Write-Verbose "$(Get-FormattedDate) Installing UNS SIEM Agent..."
                 # Insalling UNS SIEM Agent
                 $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
                 $process.WaitForExit()
-                
-                Write-Verbose -Message "$(Get-FormattedDate) Elastic Agent has been installed."
-                Start-Sleep -Milliseconds 3
+                    # Check the exit code
+                    if ($process.ExitCode -ne 0) {
+                        throw "Installation failed with exit code $($process.ExitCode)"
+                    } else {
+                        Write-Verbose -Message "$(Get-FormattedDate) Elastic Agent has been installed."
+                    }
                 }
                 catch {
                     $errorMessage = $_.Exception
                     Write-Output "$(Get-FormattedDate) Installation failed because of $($errorMessage)"
                     exit
                 }
-
+                
+                
                 #modifying services
                 if (Get-Service -ServiceName "Elastic Agent") {
                     try {
@@ -634,31 +664,38 @@ function Install-ElasticAgent {
                         $source = $env:programfiles.Trim() + "\Elastic\Agent".Trim()
                         $destination = $env:programfiles.Trim() + "\UNS SIEM Agent\".Trim()
                         Write-Verbose "$(Get-FormattedDate) Moving files from $source to $destination"
-                        try {
-                            Move-Item -Path $source -Destination $destination -Force
+                        # test if path exist before operations
+                        if (Test-Path $destination\agent) {
+                            Write-Verbose "$(Get-FormattedDate) Stopping services and deleting the folder first"
+                            try {
+                                #if exist stop services and remove the folder
+                                Stop-Service -ServiceName "Elastic Agent"
+                                Remove-Item $destination\agent -Force -Recurse
+                            }
+                            catch {
+                                $errorMessage = $_.Exception
+                                Write-Error $errorMessage -ErrorAction Stop
+                            }
+                            Write-Verbose "$(Get-FormattedDate) agent folder deleted successfully "
+                        } else {
+                            try {
+                                #if does not exist, continue and move the agent folder.
+                                Move-Item -Path $source -Destination $destination -Force
+                            }
+                            catch {
+                                $errorMessage = $_.Exception
+                                Write-Error $errorMessage -ErrorAction Stop
+                                Remove-Item -Path $destination\Agent -Recurse -Force -ErrorAction SilentlyContinue
+                            }
+                            Write-Verbose "$(Get-FormattedDate) Agent files moved successfully"
                         }
-                        catch {
-                            $errorMessage = $_.Exception
-                            Write-Error $errorMessage -ErrorAction Stop
-                            Remove-Item -Path $destination\Agent -Recurse -Force -ErrorAction SilentlyContinue
-                        }
-                        Write-Verbose "$(Get-FormattedDate) Agent files moved successfully"
                         Start-Sleep -Milliseconds 500
 
                         #assuming everything went through, lets modify service binPath
                         Write-Verbose "$(Get-FormattedDate) modifying UNS SIEM Agent binPath via sc.exe"
-                        # Define the base directory
-                        $baseDirectory = "C:\Program Files\UNS SIEM Agent\Agent\data"
-                        # Get the dynamic folder
-                        $dynamicFolder = Get-ChildItem -Path $baseDirectory | Where-Object { $_.PSIsContainer } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-                        # Define the file you want to get
-                        $agentname = "elastic-agent.exe"
-                        # Get the file within the dynamic folder
-                        $agentfile = Get-ChildItem -Path $dynamicFolder.FullName -Recurse -File | Where-Object { $_.Name -eq $agentname }
-                        $agentfile.FullName
-                        Remove-Item -Path $InstallDIR\agent\elastic-agent.exe -Force
-                        New-Item -ItemType SymbolicLink -Path $InstallDIR\agent\elastic-agent.exe -Target $agentfile.FullName -Force
 
+                        #change binPath for the new service
+                        Write-Verbose "$(Get-FormattedDate) Changing binPath for UNS SIEM Agent"
                         try {
                             sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
                         }
@@ -667,6 +704,25 @@ function Install-ElasticAgent {
                             Write-Error $errorMessage -ErrorAction Stop
                         }
                         Write-Verbose "$(Get-FormattedDate) binPath modified successfully"
+                        
+                        # Define the base directory
+                        $baseDirectory = "C:\Program Files\UNS SIEM Agent\Agent\data"
+                        
+                        # Get the dynamic folder
+                        $dynamicFolder = Get-ChildItem -Path $baseDirectory | Where-Object { $_.PSIsContainer } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                        
+                        # Define the file you want to get
+                        $agentname = "elastic-agent.exe"
+                        
+                        # Get the file within the dynamic folder
+                        $agentfile = Get-ChildItem -Path $dynamicFolder.FullName -Recurse -File | Where-Object { $_.Name -eq $agentname }
+                        $agentfile.FullName
+                        
+                        #remove old symlink
+                        Remove-Item -Path $InstallDIR\agent\elastic-agent.exe -Force
+                        #create up-to-date symlink
+                        New-Item -ItemType SymbolicLink -Path $InstallDIR\agent\elastic-agent.exe -Target $agentfile.FullName -Force
+
 
                         #Atetmpting to start uns siem agent
                         Write-Verbose "$(Get-FormattedDate)  Attempting to start UNS SIEM Agent Service"
@@ -701,24 +757,24 @@ try {
     if (Get-Service -Name Perch*) {
         Uninstall-Perch
     } else 
-        {Write-Output "Perch is not installed on the system"
+        {Write-Verbose "$(Get-FormattedDate) Perch is not installed on the system"
     }
     if ($null -eq (Get-Service -Name "Sysmon" -ErrorAction SilentlyContinue)) {
         if ((Get-Service -Name "Sysmon64" -ErrorAction SilentlyContinue)) {
-            Write-Output "Sysmon64 already installed."
+            Write-Verbose "$(Get-FormattedDate) Sysmon64 already installed."
         } else {
-            Write-Verbose "Sysmon64 not installed on the system. Installing..."
+            Write-Verbose "$(Get-FormattedDate) Sysmon64 not installed on the system. Installing..."
             Install-Sysmon64
             Set-Sysmon64
         }    
     } else {
-        Write-Verbose "Uninstalling Sysmon32"
+        Write-Verbose "$(Get-FormattedDate) Uninstalling Sysmon32"
         Uninstall-Sysmon32
         Start-Sleep -Seconds 1
-        Write-Verbose "Installing Sysmon64"
+        Write-Verbose "$(Get-FormattedDate) Installing Sysmon64"
         Install-Sysmon64
         Start-Sleep -Seconds 1
-        Write-Verbose "Setting Sysmon64 config"
+        Write-Verbose "$(Get-FormattedDate) Setting Sysmon64 config"
         Set-Sysmon64
         Start-Sleep -Seconds 1
     }
@@ -726,10 +782,10 @@ try {
     if (($null -eq (Get-Service -Name Perch*)) -and (Get-Service -Name Sysmon64)) { 
         Install-ElasticAgent
             if ($null -ne (Get-Service -ServiceName "Elastic Agent")) {
-                Write-Verbose "UNS SIEM Agent successfully installed"
+                Write-Verbose "$(Get-FormattedDate) UNS SIEM Agent successfully installed"
             }
     } else {
-        Write-Output "Something went wrong"
+        Write-Output "$(Get-FormattedDate) Something went wrong"
     }
 
    <# if (Get-Service -Name "UNSAgent") {
@@ -772,9 +828,9 @@ catch {
 }
 finally {
     Remove-ElasticLeftovers -path $logpath
-    Write-Verbose -Message "Going back to initial location: $($InitialLocation)" 
+    Write-Verbose "$(Get-FormattedDate) Going back to initial location: $($InitialLocation)" 
     Push-Location -LiteralPath $InitialLocation
     Stop-Transcript -ErrorAction SilentlyContinue
-    Write-Verbose "All temp files were removed."
+    Write-Verbose "$(Get-FormattedDate) All temp files were removed."
 }
 ### END ACTIN ###
