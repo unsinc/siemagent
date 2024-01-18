@@ -642,6 +642,7 @@ function Install-ElasticAgent {
                     try {
                         #Rename elastic service:
                         Write-Verbose "$(Get-FormattedDate) Services operations started:"
+
                         Start-Sleep -Milliseconds 500
                         Write-Verbose "$(Get-FormattedDate) Stopping elastic agent service"
                         try {
@@ -665,18 +666,18 @@ function Install-ElasticAgent {
                             Set-Service -ServiceName "Elastic Agent" -Description "UNS SIEM Agent is a unified agent to observe, monitor and protect your system."
 
                         }
-
                         catch {
                             $errorMessage = $_.Exception
                             Write-Error $errorMessage -ErrorAction Stop
                             exit
                         }
+
                         Write-Verbose "$(Get-FormattedDate) Elastic agent service renamed to UNS SIEM Agent"
                         Write-Verbose "$(Get-FormattedDate) UNS SIEM Agent service description changed"
                         
                         Start-Sleep -Milliseconds 500
                         #Atetmpting to start uns siem agent
-                        Write-Verbose "$(Get-FormattedDate)  Attempting to start UNS SIEM Agent Service"
+                        Write-Verbose "$(Get-FormattedDate) Attempting to start UNS SIEM Agent Service"
                         try {
                             Start-Service -ServiceName "Elastic Agent"
                         }
@@ -685,7 +686,7 @@ function Install-ElasticAgent {
                             Write-Output $errorMessage
                             break
                         }
-                        Write-Verbose "$(Get-FormattedDate)  Service started successfully"
+                        Write-Verbose "$(Get-FormattedDate) Service started successfully"
     
                     }
                     catch {
