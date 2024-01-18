@@ -347,8 +347,10 @@ function Uninstall-Sysmon32 {
     try {
         $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon.exe" -ArgumentList "-u force"  -NoNewWindow -PassThru
         $process.WaitForExit()
-        Write-Output  "$(Get-FormattedDate) Uninstalling Sysmon32 completed" 
-        Write-Verbose "$(Get-FormattedDate) Uninstalling Sysmon32 completed."
+            # Check the exit code
+            if ($process.ExitCode -ne 0) {
+                throw "Installation failed with exit code $($process.ExitCode)"
+            }
         Remove-Item -Path "$InstallDIR\sysmon\Sysmon.exe" -Force -ErrorAction SilentlyContinue
     }
     catch {
@@ -356,6 +358,8 @@ function Uninstall-Sysmon32 {
         Write-Error "$(Get-FormattedDate) Error while uninstalling Sysmon32: $errorMessage"
         exit
     }
+    Write-Output  "$(Get-FormattedDate) Uninstalling Sysmon32 completed" 
+    Write-Verbose "$(Get-FormattedDate) Uninstalling Sysmon32 completed."
 }
 
 # Uninstall Perch
