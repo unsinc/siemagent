@@ -651,6 +651,7 @@ function Install-ElasticAgent {
                         catch {
                             $errorMessage = $_.Exception
                             Write-Error $errorMessage -ErrorAction Stop
+                            exit
                         }
                         Write-Verbose "$(Get-FormattedDate) Elastic agent service stopped."
                         Start-Sleep -Milliseconds 500
@@ -667,6 +668,7 @@ function Install-ElasticAgent {
                         catch {
                             $errorMessage = $_.Exception
                             Write-Error $errorMessage -ErrorAction Stop
+                            exit
                         }
                         Write-Verbose "$(Get-FormattedDate) Elastic agent service renamed to UNS SIEM Agent"
                         Write-Verbose "$(Get-FormattedDate) UNS SIEM Agent service description changed"
@@ -688,6 +690,7 @@ function Install-ElasticAgent {
                             catch {
                                 $errorMessage = $_.Exception
                                 Write-Error $errorMessage -ErrorAction Stop
+                                exit
                             }
                             Write-Verbose "$(Get-FormattedDate) agent folder deleted successfully "
                         } else {
@@ -699,6 +702,7 @@ function Install-ElasticAgent {
                                 $errorMessage = $_.Exception
                                 Write-Error $errorMessage -ErrorAction Stop
                                 Remove-Item -Path $destination\Agent -Recurse -Force -ErrorAction SilentlyContinue
+                                exit
                             }
                             Write-Verbose "$(Get-FormattedDate) Agent files moved successfully"
                         }
@@ -716,6 +720,7 @@ function Install-ElasticAgent {
                         catch {
                             $errorMessage = $_.Exception
                             Write-Error $errorMessage -ErrorAction Stop
+                            exit
                         }
                         Write-Verbose "$(Get-FormattedDate) binPath modified successfully"
                         
@@ -746,6 +751,7 @@ function Install-ElasticAgent {
                         catch {
                             $errorMessage = $_.Exception
                             Write-Output $errorMessage
+                            break
                         }
                         Write-Verbose "$(Get-FormattedDate)  Service started successfully"
     
@@ -754,6 +760,7 @@ function Install-ElasticAgent {
                         $errorMessage = $_.Exception
                         Write-Error "$(Get-FormattedDate) Modifying services failed because of $($errorMessage)" -ErrorAction Stop
                         Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
+                        exit
                     }
                 }
             }
@@ -762,6 +769,7 @@ function Install-ElasticAgent {
                 $errorMessage = $_.Exception
                 Write-Error "$(Get-FormattedDate) UNS ElasticSIEM Agent deployment failed for following reason: $($errorMessage)" -ErrorAction Stop
                 Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
+                exit
         }
 }
 
