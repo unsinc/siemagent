@@ -363,10 +363,16 @@ function Uninstall-Perch {
     param()
     $arguments = "/X{18B16389-F8F8-4E48-9E78-A043D5742B99}"
         try {
-                Write-Verbose "$timestamp Uninstalling Perch agent"
-                $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "$arguments" -NoNewWindow -PassThru
-                $process.WaitForExit()
-            } catch {
+            Write-Verbose "$timestamp Uninstalling Perch agent"
+            $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "$arguments" -NoNewWindow -PassThru
+            $process.WaitForExit()
+
+            # Check the exit code
+            if ($process.ExitCode -ne 0) {
+                throw "Installation failed with exit code $($process.ExitCode)"
+            }
+
+        } catch {
                 $errorMessage = $_.Exception.Message
                 Write-Error "$(Get-FormattedDate) Error while uninstalling Sysmon32: $errorMessage"
                 exit
@@ -380,14 +386,19 @@ function Install-Sysmon64 {
     try {
         $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon64.exe" -ArgumentList "-accepteula -i" -NoNewWindow -PassThru
         $process.WaitForExit()
-        Write-Output "$(Get-FormattedDate) Installation of Sysmon64 is complete" 
-        Write-Verbose -Message "Installation of Sysmon64 is complete"
+
+        # Check the exit code
+        if ($process.ExitCode -ne 0) {
+            throw "Installation failed with exit code $($process.ExitCode)"
+        }
+
     }
     catch {
         $errorMessage = $_.Exception.Message
         Write-Error "$(Get-FormattedDate) Error while installing Sysmon64: $errorMessage"
-        #Invoke-SendSlack -errorMessage $errorMessage
     }
+    Write-Output "$(Get-FormattedDate) Installation of Sysmon64 is complete" 
+    Write-Verbose -Message "Installation of Sysmon64 is complete"
 }
 
 # Function to configure running Sysmon64
@@ -399,13 +410,18 @@ function Set-Sysmon64 {
             Write-Output  "$(Get-FormattedDate) Sysmon64 is running. Setting the configuration for Sysmon64." 
             $process = Start-Process -FilePath "$InstallDIR\sysmon\sysmon64.exe" -ArgumentList "-c `"$InstallDIR\configs\UNS-Sysmon.xml`"" -NoNewWindow -PassThru
             $process.WaitForExit()
-            Write-Output "$(Get-FormattedDate) Configuration of Sysmon64 is complete" 
-            Write-Verbose "$(Get-FormattedDate) Configuration of Sysmon64 is complete"
+
+            # Check the exit code
+            if ($process.ExitCode -ne 0) {
+                throw "Installation failed with exit code $($process.ExitCode)"
+            }
         }
         catch {
             $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) Error while setting Sysmon64 config: $errorMessage"
         }
+        Write-Output "$(Get-FormattedDate) Configuration of Sysmon64 is complete" 
+        Write-Verbose "$(Get-FormattedDate) Configuration of Sysmon64 is complete"
     } else {
         Write-Error "$(Get-FormattedDate) Sysmon64 was not found on the system" 
         Write-Verbose "$(Get-FormattedDate) Sysmon64 was not found on the system"
