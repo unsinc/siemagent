@@ -362,6 +362,8 @@ function Uninstall-Sysmon32 {
         Write-Error "$(Get-FormattedDate) Error while uninstalling Sysmon32: $errorMessage"
         exit
     }
+    #destroy the handle cache
+    $null = $handle
 }
 
 # Uninstall Perch
@@ -386,6 +388,8 @@ function Uninstall-Perch {
                 Write-Error "$(Get-FormattedDate) Error while uninstalling Sysmon32: $errorMessage"
                 exit
             }
+            #destroy the handle cache
+            $null = $handle
 }
 
 # Function to install Sysmon64 and configure it
@@ -410,6 +414,8 @@ function Install-Sysmon64 {
         $errorMessage = $_.Exception.Message
         Write-Error "$(Get-FormattedDate) Error while installing Sysmon64: $errorMessage"
     }
+    #destroy the handle cache
+    $null = $handle
 
 }
 
@@ -436,6 +442,8 @@ function Set-Sysmon64 {
             $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) Error while setting Sysmon64 config: $errorMessage"
         }
+        #destroy the handle cache
+        $null = $handle 
 
     } else {
         Write-Error "$(Get-FormattedDate) Sysmon64 was not found on the system" 
@@ -559,19 +567,20 @@ function Install-ElasticAgent {
                 catch {
                     $errorMessage = $_.Exception
                     Write-Error "$(Get-FormattedDate) Agent files copy failed because of $($errorMessage)" -ErrorAction Stop
-                    exit
+                    break
                 }
                 
-                # Checking if tokens and URL is provided and triggering token Form
+                # Checking if tokens and URL is provided and triggering token Form LOGIC NEED FIX
                 Write-Verbose "$(Get-FormattedDate) Starting Fleet and Token procedures."
                 Start-Sleep -Milliseconds 300
-                if (($fleetURL) -and (-not $token)) {
+                if ($token -and $fleetURL) {
+                    Write-Verbose "$(Get-FormattedDate) Token and fleetURL already provided"
+                } elseif (($fleetURL) -and (-not $token)) {
                     Write-Verbose "$(Get-FormattedDate) Fleet URL is already provided: $fleetURL"
                     Write-Verbose "$(Get-FormattedDate) Missing token. Initiating form input."
                     $token = Show-TokenForm
                     if (($null -eq $token) -or ($token.Length -lt 30)) {
                         Write-Error "$(Get-FormattedDate): Token is empty or too short. Seems that the user cancelled the input or did not provided required value" -ErrorAction Stop
-                        exit
                     }
                 } elseif (($token) -and (-not $fleetURL)) {
                     Write-Verbose "$(Get-FormattedDate) Token is already provided: $token"
@@ -579,7 +588,6 @@ function Install-ElasticAgent {
                     $fleetURL = Show-TokenForm
                     if (($null -eq $fleetURL) -or ($fleetURL.Length -lt 30)) {
                         Write-Error "$(Get-FormattedDate): fleetURL is empty or too short. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
-                        exit
                     }
                     Write-Verbose "$(Get-FormattedDate) FleetURL provided: $fleetURL"
 
@@ -627,8 +635,8 @@ function Install-ElasticAgent {
                     Write-Output "$(Get-FormattedDate) Installation failed because of $($errorMessage)"
                     exit
                 }
-                
-                
+                # destroy the handle cache
+                $null = $handle
                 #modifying services
                 if (Get-Service -ServiceName "Elastic Agent") {
                     try {
@@ -700,9 +708,10 @@ function Install-ElasticAgent {
                         Write-Verbose "$(Get-FormattedDate) modifying UNS SIEM Agent binPath via sc.exe"
 
                         #change binPath for the new service
+                        $newAgentPAth = $destination + "agent\elastic-agent.exe"
                         Write-Verbose "$(Get-FormattedDate) Changing binPath for UNS SIEM Agent"
                         try {
-                            sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
+                            sc.exe config "Elastic Agent" binPath= $newAgentPAth
                         }
                         catch {
                             $errorMessage = $_.Exception
@@ -837,5 +846,6 @@ finally {
     Push-Location -LiteralPath $InitialLocation
     Stop-Transcript -ErrorAction SilentlyContinue
     Write-Verbose "$(Get-FormattedDate) All temp files were removed."
+
 }
-### END ACTIN ###
+### END ACTION ###
