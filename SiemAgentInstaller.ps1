@@ -634,15 +634,28 @@ function Install-ElasticAgent {
                         $source = $env:programfiles.Trim() + "\Elastic\Agent".Trim()
                         $destination = $env:programfiles.Trim() + "\UNS SIEM Agent\".Trim()
                         Write-Verbose "$(Get-FormattedDate) Moving files from $source to $destination"
-                        try {
-                            Move-Item -Path $source -Destination $destination -Force
+                        if (Test-Path $destination\agent) {
+                            Write-Verbose "$(Get-FormattedDate) Stopping services and deleting the folder first"
+                            try {
+                                Stop-Service -ServiceName "Elastic Agent"
+                                Remove-Item $destination\agent -Force -Recurse
+                            }
+                            catch {
+                                $errorMessage = $_.Exception
+                                Write-Error $errorMessage -ErrorAction Stop
+                            }
+                            Write-Verbose "$(Get-FormattedDate) agent folder deleted successfully "
+                        } else {
+                            try {
+                                Move-Item -Path $source -Destination $destination -Force
+                            }
+                            catch {
+                                $errorMessage = $_.Exception
+                                Write-Error $errorMessage -ErrorAction Stop
+                                Remove-Item -Path $destination\Agent -Recurse -Force -ErrorAction SilentlyContinue
+                            }
+                            Write-Verbose "$(Get-FormattedDate) Agent files moved successfully"
                         }
-                        catch {
-                            $errorMessage = $_.Exception
-                            Write-Error $errorMessage -ErrorAction Stop
-                            Remove-Item -Path $destination\Agent -Recurse -Force -ErrorAction SilentlyContinue
-                        }
-                        Write-Verbose "$(Get-FormattedDate) Agent files moved successfully"
                         Start-Sleep -Milliseconds 500
 
                         #assuming everything went through, lets modify service binPath
