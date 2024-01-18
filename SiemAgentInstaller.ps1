@@ -159,13 +159,12 @@ function Remove-ElasticLeftovers {
     if (Test-Path -Path $path) {
         $items = Get-ChildItem $path -Exclude *.log -Depth 3 -Recurse
 		foreach ($item in $items) {
-			if (Test-Path $item -PathType Leaf) {
-                Write-Debug "Removing $item."
+			if (Test-Path $item -PathType Any) {
+                Write-Debug "$(Get-FormattedDate) Removing $item."
 				Remove-Item -Path $item -Recurse -Force -ErrorAction SilentlyContinue -Exclude "*.log"
-			} else { Write-Output "" }
+			}
 		}
         Write-Verbose "$(Get-FormattedDate) Leftovers removed"
-    } else {
     }
 }
 
@@ -634,9 +633,11 @@ function Install-ElasticAgent {
                         $source = $env:programfiles.Trim() + "\Elastic\Agent".Trim()
                         $destination = $env:programfiles.Trim() + "\UNS SIEM Agent\".Trim()
                         Write-Verbose "$(Get-FormattedDate) Moving files from $source to $destination"
+                        # test if path exist before operations
                         if (Test-Path $destination\agent) {
                             Write-Verbose "$(Get-FormattedDate) Stopping services and deleting the folder first"
                             try {
+                                #if exist stop services and remove the folder
                                 Stop-Service -ServiceName "Elastic Agent"
                                 Remove-Item $destination\agent -Force -Recurse
                             }
@@ -647,6 +648,7 @@ function Install-ElasticAgent {
                             Write-Verbose "$(Get-FormattedDate) agent folder deleted successfully "
                         } else {
                             try {
+                                #if does not exist, continue and move the agent folder.
                                 Move-Item -Path $source -Destination $destination -Force
                             }
                             catch {
@@ -674,10 +676,13 @@ function Install-ElasticAgent {
                         $agentfile = Get-ChildItem -Path $dynamicFolder.FullName -Recurse -File | Where-Object { $_.Name -eq $agentname }
                         $agentfile.FullName
                         
-                        #remove old symlink and create new up-to-date one
+                        #remove old symlink
                         Remove-Item -Path $InstallDIR\agent\elastic-agent.exe -Force
+                        #create up-to-date symlink
                         New-Item -ItemType SymbolicLink -Path $InstallDIR\agent\elastic-agent.exe -Target $agentfile.FullName -Force
 
+                        #change binPath for the new service
+                        Write-Verbose "$(Get-FormattedDate) Changing binPath for UNS SIEM Agent"
                         try {
                             sc.exe config "Elastic Agent" binPath= "C:\Program Files\UNS SIEM Agent\agent\elastic-agent.exe"
                         }
