@@ -48,7 +48,7 @@ param
 )
 if($invalid_parameter)
 {
-    Write-Output "[-] $($invalid_parameter) is not a valid parameter"
+    Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\SiemAgentInstaller.ps1"
     throw
 
 }
