@@ -350,16 +350,17 @@ function Uninstall-Sysmon32 {
             # Check the exit code
             if ($process.ExitCode -ne 0) {
                 throw "Installation failed with exit code $($process.ExitCode)"
+            } else {
+                Write-Output  "$(Get-FormattedDate) Uninstalling Sysmon32 completed" 
+                Write-Verbose "$(Get-FormattedDate) Uninstalling Sysmon32 completed."
+                Remove-Item -Path "$InstallDIR\sysmon\Sysmon.exe" -Force -ErrorAction SilentlyContinue
             }
-        Remove-Item -Path "$InstallDIR\sysmon\Sysmon.exe" -Force -ErrorAction SilentlyContinue
     }
     catch {
         $errorMessage = $_.Exception.Message
         Write-Error "$(Get-FormattedDate) Error while uninstalling Sysmon32: $errorMessage"
         exit
     }
-    Write-Output  "$(Get-FormattedDate) Uninstalling Sysmon32 completed" 
-    Write-Verbose "$(Get-FormattedDate) Uninstalling Sysmon32 completed."
 }
 
 # Uninstall Perch
@@ -374,6 +375,8 @@ function Uninstall-Perch {
             # Check the exit code
             if ($process.ExitCode -ne 0) {
                 throw "Installation failed with exit code $($process.ExitCode)"
+            } else {
+                Write-Verbose "$(Get-FormattedDate) Perch uninstall completed."
             }
 
         } catch {
@@ -394,6 +397,9 @@ function Install-Sysmon64 {
         # Check the exit code
         if ($process.ExitCode -ne 0) {
             throw "Installation failed with exit code $($process.ExitCode)"
+        } else {
+            Write-Output "$(Get-FormattedDate) Installation of Sysmon64 is complete" 
+            Write-Verbose "$(Get-FormattedDate) Installation of Sysmon64 is complete"
         }
 
     }
@@ -401,8 +407,7 @@ function Install-Sysmon64 {
         $errorMessage = $_.Exception.Message
         Write-Error "$(Get-FormattedDate) Error while installing Sysmon64: $errorMessage"
     }
-    Write-Output "$(Get-FormattedDate) Installation of Sysmon64 is complete" 
-    Write-Verbose -Message "Installation of Sysmon64 is complete"
+
 }
 
 # Function to configure running Sysmon64
@@ -418,14 +423,16 @@ function Set-Sysmon64 {
             # Check the exit code
             if ($process.ExitCode -ne 0) {
                 throw "Installation failed with exit code $($process.ExitCode)"
+            } else {
+                Write-Output "$(Get-FormattedDate) Configuration of Sysmon64 is complete" 
+                Write-Verbose "$(Get-FormattedDate) Configuration of Sysmon64 is complete"
             }
         }
         catch {
             $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) Error while setting Sysmon64 config: $errorMessage"
         }
-        Write-Output "$(Get-FormattedDate) Configuration of Sysmon64 is complete" 
-        Write-Verbose "$(Get-FormattedDate) Configuration of Sysmon64 is complete"
+
     } else {
         Write-Error "$(Get-FormattedDate) Sysmon64 was not found on the system" 
         Write-Verbose "$(Get-FormattedDate) Sysmon64 was not found on the system"
@@ -606,6 +613,8 @@ function Install-ElasticAgent {
                     # Check the exit code
                     if ($process.ExitCode -ne 0) {
                         throw "Installation failed with exit code $($process.ExitCode)"
+                    } else {
+                        Write-Verbose -Message "$(Get-FormattedDate) Elastic Agent has been installed."
                     }
                 }
                 catch {
@@ -613,7 +622,7 @@ function Install-ElasticAgent {
                     Write-Output "$(Get-FormattedDate) Installation failed because of $($errorMessage)"
                     exit
                 }
-                Write-Verbose -Message "$(Get-FormattedDate) Elastic Agent has been installed."
+                
                 
                 #modifying services
                 if (Get-Service -ServiceName "Elastic Agent") {
