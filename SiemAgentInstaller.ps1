@@ -7,7 +7,7 @@ Deployment scrip will perform following tasks:
 1. Uninstall Sysmon 32 bit from the system.
 2. Install Sysmon 64bit on the system.
 3. Install and enforce proprietary Sysmon64 config file.
-4. Deploy UNS SIEM Agent and require enrollment-token/URL input from the user, if inputs are not given on the CLI.
+4. Deploy UNS SIEM Agent and require enrollment-token/URL input from the user, if values are not passed with -token or -fleetURL parameters.
 
 
 .NOTES
@@ -18,19 +18,28 @@ Copyright	   : 2024, UNS Inc
 Version		   : 2024.01.15
 
 .EXAMPLE
-.\SiemAgentInstaller.ps1 -token <elastic enrollment token>
+.\SiemAgentInstaller.ps1 -Verbose
+
+.EXAMPLE
+.\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose
+
+.EXAMPLE
+For additioanal help "Get-Help .\SiemAgentInstaller.ps1 -Online"
+
+.LINK
+https://github.com/unsinc/siemagent/blob/main/README.md
 
 .PARAMETER token
 Use this switch to provide an enrollment token, enabling the registration of new UNS nodes to a specific UNS SIEM instance.
 
 .PARAMETER fleetURL
-Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM instance. Format is: https://750258aff4014f51a3fvc4a9d68bf5f.fleet.us-east-1.aws.elastic-cloud.com:443
+Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM instance. Format is: https://750258aff4014f51a3fvc4a9d68bf5f.fleet.us-east-1.aws.elastic-cloud.com
 
 .PARAMETER logpath
-Use this switch to direct the log/data output to the specified directory.
+Use this switch to direct the log/data output to the specified directory. By default environment temp path will be used.
 
 #>
-[CmdletBinding()]
+[CmdletBinding(HelpUri = 'https://github.com/unsinc/siemagent/blob/main/README.md')]
 param
 (
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
@@ -38,7 +47,7 @@ param
 	[string[]]$token,
 
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
-    [ValidatePattern("^https:\/\/.*")]
+    [ValidatePattern("^https:\/\/.*\.elastic-cloud\.com")]
 	[string[]]$fleetURL,
 
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
@@ -46,6 +55,8 @@ param
 
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
+
+#check if invalid parameter was passed on the console
 if($invalid_parameter)
 {
     Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\SiemAgentInstaller.ps1"
@@ -74,16 +85,19 @@ function Get-FormattedDate {
 
 ## setttings ##
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# check if fleetURL was passed on the console
 if ($fleetURL) {
 Write-Verbose "$(Get-FormattedDate) URL is: $fleetURL"
 }
+# check if token was passed on the console
 if ($token) {
 Write-Verbose "$(Get-FormattedDate) oken is: $token"
 }
 
+# get current location so we can return to it after the deployment.
 $currentLocation = Get-Location
 $InitialLocation = $currentLocation
-Write-Verbose -Message "$(Get-FormattedDate) Initial location is: $($InitialLocation)"
+Write-Verbose "$(Get-FormattedDate) Initial location is: $($InitialLocation)"
 
 #Perform spelling check and create logpath folder for all further actions.
 [String]$logpath = $logpath -replace '\\\\+', '\'
@@ -95,11 +109,13 @@ if ($logpath) {
 
         [String]$logpath = $logpath.Trim(), $unsfiles -join ''
         Write-Verbose "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
-
+        Write-Output "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
+        Write-Debug $_
     } else {
         
         [String]$logpath = $logpath.Trim(), "\", $unsfiles -join ''
         Write-Verbose "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
+        Write-Output "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
     }
     if (Test-Path $logpath) {
         Write-Verbose "$(Get-FormattedDate) $logpath directory exist."
@@ -109,13 +125,13 @@ if ($logpath) {
         }
         catch [System.IO.PathTooLongException] {
             $errorMessage = "File Path too long. Maximum allowed characters 256."
-            throw $errorMessage
+            Write-Error $errorMessage -ErrorAction Stop
             Start-Sleep 5
             exit
         }
         catch {
             $errorMessage = $_.Exception
-            Write-Output "$(Get-FormattedDate) $logpath folder creation failed because of: $errorMessage"
+            Write-Error "$(Get-FormattedDate) $logpath folder creation failed because of: $errorMessage"
             Start-Sleep 5
             exit
         }
@@ -125,9 +141,9 @@ if ($logpath) {
     Write-Verbose -Message "$(Get-FormattedDate) Default LogPath is: $logpath"
 }
 
+#start transcript logging.
 $transcriptFilePath = Join-Path -Path $logpath -ChildPath "UNSAgent_Installer_Transcript_$(Get-FormattedDate).txt"
 Start-Transcript -Path $transcriptFilePath
-
 
 # Download folder in case files are being downloaded from internet.
 $downloadFolder = $logpath
@@ -139,8 +155,8 @@ if (Test-Path $InstallDIR) {
     "Exist" | Out-Null
 } else {
     try {
-        New-Item -Path $InstallDIR -ItemType Directory
-        Write-Output "Setting up Install DIR to $($InstallDIR)" 
+        New-Item -Path $InstallDIR -ItemType Directory -Force
+        Write-Output "Setting up Install DIR to $($InstallDIR)"
         Write-Verbose -Message "$(Get-FormattedDate) Default Installation Directory is: $InstallDIR"
     }
     catch {
