@@ -282,7 +282,6 @@ try {
         if (-not (Test-Path $dirPath)) {
             Write-Output "$(Get-FormattedDate) Creating necessary folders .."
             New-Item -Path $dirPath -ItemType Directory -Force -ErrorAction Stop
-            Write-Output "$dir created successfully." 
             Write-Verbose "$(Get-FormattedDate) $dir folder created successfully."
         } else {
             Write-Verbose "$(Get-FormattedDate) $dir directory exists"
