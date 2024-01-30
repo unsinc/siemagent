@@ -572,6 +572,7 @@ function Install-ElasticAgent {
 
                 #Unzipping files
                 Write-Verbose "$(Get-FormattedDate) Unzipping agent files, it will take few seconds..."
+                Write-Output "$(Get-FormattedDate) Unzipping agent files, it will take few seconds..."
                 try {
                     # Try unzipping the files
                     Write-Verbose "$(Get-FormattedDate) LogPath is $logpath"
@@ -582,6 +583,7 @@ function Install-ElasticAgent {
                     
                     Start-Sleep -Milliseconds 500
                     Write-Verbose "$(Get-FormattedDate) All files were unzipped, installing agent..."
+                    Write-Output "$(Get-FormattedDate) Files were unzipped, installing siem agent..."
                 }
                 catch {
                     $errorMessage = $_.Exception
@@ -628,16 +630,20 @@ function Install-ElasticAgent {
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
+            Write-Output "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
+            Write-Output "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
+            Write-Output "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
             
             # additional check if token was provided and value is not null
             if ($null -eq $token) {
-                Write-Verbose "$(Get-FormattedDate) Token issues after token forms"
+                Write-Error "$(Get-FormattedDate) Token issues after token forms"
                 exit
 
             } else {
                 # installing elastic services
                 try {
                     Write-Verbose "$(Get-FormattedDate) Installing UNS SIEM Agent..."
+                    Write-Output "$(Get-FormattedDate) Installing UNS SIEM Agent..."
                 # Insalling UNS SIEM Agent
                 $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
                 $handle = $process.Handle  # Cache the process handle
@@ -647,6 +653,7 @@ function Install-ElasticAgent {
                         throw "Installation failed with exit code $($process.ExitCode)"
                     } else {
                         Write-Verbose -Message "$(Get-FormattedDate) Elastic Agent has been installed."
+                        Write-Output "$(Get-FormattedDate) Elastic Agent has been installed."
                     }
                 }
                 catch {
@@ -806,6 +813,9 @@ finally {
     Push-Location -LiteralPath $InitialLocation
     Stop-Transcript -ErrorAction SilentlyContinue
     Write-Verbose "$(Get-FormattedDate) All temp files were removed."
-
+    Write-Output "$(Get-FormattedDate) All temp files were removed."
+    Write-Output "$(Get-FormattedDate) Good bye"
+    Start-Sleep 5
+    exit
 }
 ### END ACTIN ###
