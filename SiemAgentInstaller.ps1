@@ -63,15 +63,6 @@ if($invalid_parameter)
     throw
 
 }
-
-# Check if the script is running with elevated privileges
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    # Relaunch the script with elevated privileges
-    Write-Output "[-] Administrator privileges required."
-    Start-Sleep 5
-    exit
-}
-
 # Time function
 function Get-FormattedDate {
     Get-Date -Format "yyyyMMdd_HHmmss"
@@ -82,6 +73,13 @@ function Get-FormattedDate {
     # For more information see Get-Date - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/get-date?view=powershell-7.4
 }
 
+# Check if the script is running with elevated privileges
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    # Relaunch the script with elevated privileges
+    Write-Output "$(Get-FormattedDate) Administrator privileges required. Please restart as Administrator"
+    Start-Sleep 5
+    exit
+}
 
 ## setttings ##
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -91,7 +89,7 @@ Write-Verbose "$(Get-FormattedDate) URL is: $fleetURL"
 }
 # check if token was passed on the console
 if ($token) {
-Write-Verbose "$(Get-FormattedDate) oken is: $token"
+Write-Verbose "$(Get-FormattedDate) token is: $token"
 }
 
 # get current location so we can return to it after the deployment.
@@ -148,6 +146,7 @@ Start-Transcript -Path $transcriptFilePath
 # Download folder in case files are being downloaded from internet.
 $downloadFolder = $logpath
 Write-Verbose -Message "$(Get-FormattedDate) Download Folder is: $downloadFolder"
+Write-Output "$(Get-FormattedDate) Download Folder is: $downloadFolder"
 
 #Default Install Directory
 $InstallDIR = $env:programfiles + '\UNS SIEM Agent'
@@ -241,7 +240,7 @@ foreach ($i in 0..($agentPaths.Length - 1)) {
     Write-Verbose "$(Get-FormattedDate) Agent Path $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
 }
 
-Write-Output "Downloading required deployment files, please be patient."
+Write-Output "$(Get-FormattedDate) Downloading required deployment files, please be patient."
 # Function to download files from the internet
 function Get-UNSFiles($downloadUrl, $installPath) {
     $retryCount = 0
@@ -269,7 +268,7 @@ function Get-UNSFiles($downloadUrl, $installPath) {
 # Download files
 for ($i=0; $i -lt $downloadUrls.Length; $i++) {
     Write-Verbose "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
-    Write-Output "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
+    #Write-Output "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
     Get-UNSFiles -downloadUrl $downloadUrls[$i] -installPath $agentPaths[$i]
 }
 
@@ -283,7 +282,7 @@ try {
         if (-not (Test-Path $dirPath)) {
             Write-Output "$(Get-FormattedDate) Creating necessary folders .."
             New-Item -Path $dirPath -ItemType Directory -Force -ErrorAction Stop
-            Write-Output "$dirPath created successfully." 
+            Write-Output "$dir created successfully." 
             Write-Verbose "$(Get-FormattedDate) $dir folder created successfully."
         } else {
             Write-Verbose "$(Get-FormattedDate) $dir directory exists"
@@ -391,6 +390,7 @@ function Uninstall-Perch {
     $arguments = "/X{18B16389-F8F8-4E48-9E78-A043D5742B99}"
         try {
             Write-Verbose "$timestamp Uninstalling Perch agent"
+            Write-Output "$timestamp Uninstalling Perch agent"
             $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "$arguments" -NoNewWindow -PassThru
             $handle = $process.Handle  # Cache the process handle
             $process.WaitForExit()
@@ -630,7 +630,6 @@ function Install-ElasticAgent {
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
-            Write-Output "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
             Write-Output "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
             Write-Output "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
             
@@ -644,6 +643,20 @@ function Install-ElasticAgent {
                 try {
                     Write-Verbose "$(Get-FormattedDate) Installing UNS SIEM Agent..."
                     Write-Output "$(Get-FormattedDate) Installing UNS SIEM Agent..."
+
+                #Delete existing service if exists. It helps during redeployment.
+                if ($null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)) {
+                    Write-Output "$(Get-FormattedDate) Removing old agent service, please wait"
+                    try {
+                        Stop-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue
+                        sc.exe delete "Elastic Agent"
+                    }
+                    catch {
+                        Write-Error "Siem agent removal failed, we will try again during deployment of current version."
+                    }
+                    Write-Output "$(Get-FormattedDate) Old agent service removed, deploying UNS SIEM Agent"
+                }
+
                 # Insalling UNS SIEM Agent
                 $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
                 $handle = $process.Handle  # Cache the process handle
@@ -653,7 +666,6 @@ function Install-ElasticAgent {
                         throw "Installation failed with exit code $($process.ExitCode)"
                     } else {
                         Write-Verbose -Message "$(Get-FormattedDate) Elastic Agent has been installed."
-                        Write-Output "$(Get-FormattedDate) Elastic Agent has been installed."
                     }
                 }
                 catch {
