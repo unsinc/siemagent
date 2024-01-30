@@ -15,7 +15,7 @@ File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
 Prerequisite   : PowerShell V5
 Copyright	   : 2024, UNS Inc
-Version		   : 2024.01.15
+Version		   : 2024.01.30
 
 .EXAMPLE
 .\SiemAgentInstaller.ps1 -Verbose
@@ -39,7 +39,7 @@ Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM inst
 Use this switch to direct the log/data output to the specified directory. By default environment temp path will be used.
 
 #>
-[CmdletBinding(HelpUri = 'https://github.com/unsinc/siemagent/blob/main/README.md')]
+[CmdletBinding()]
 param
 (
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
@@ -47,7 +47,7 @@ param
 	[string[]]$token,
 
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
-    [ValidatePattern("^https:\/\/.*\.elastic-cloud\.com")]
+    [ValidatePattern("^https:\/\/.*")]
 	[string[]]$fleetURL,
 
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
@@ -241,7 +241,7 @@ foreach ($i in 0..($agentPaths.Length - 1)) {
     Write-Verbose "$(Get-FormattedDate) Agent Path $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
 }
 
-
+Write-Output "Downloading required deployment files, please be patient."
 # Function to download files from the internet
 function Get-UNSFiles($downloadUrl, $installPath) {
     $retryCount = 0
@@ -269,24 +269,26 @@ function Get-UNSFiles($downloadUrl, $installPath) {
 # Download files
 for ($i=0; $i -lt $downloadUrls.Length; $i++) {
     Write-Verbose "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
+    Write-Output "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
     Get-UNSFiles -downloadUrl $downloadUrls[$i] -installPath $agentPaths[$i]
 }
 
 # Create necessary directories
+
 try {
     $directories = @("sysmon", "configs")
 
     foreach ($dir in $directories) {
         $dirPath = Join-Path -Path $InstallDIR -ChildPath $dir
         if (-not (Test-Path $dirPath)) {
+            Write-Output "$(Get-FormattedDate) Creating necessary folders .."
             New-Item -Path $dirPath -ItemType Directory -Force -ErrorAction Stop
-            Write-Output "$dir folder created successfully." 
+            Write-Output "$dirPath created successfully." 
             Write-Verbose "$(Get-FormattedDate) $dir folder created successfully."
         } else {
             Write-Verbose "$(Get-FormattedDate) $dir directory exists"
         }
     }
-
 }
 catch {
     $errorMessage = $_.Exception.Message
@@ -300,6 +302,7 @@ function CopyFilesToDir {
     do {
         try {
             if (-not (Test-Path "$InstallDIR\sysmon\Sysmon.exe")) {
+                Write-Output "$(Get-FormattedDate) $($dirPath) created."
                 Expand-Archive -Path $logpath\Sysmon.zip -DestinationPath $InstallDIR\sysmon -ErrorAction Stop -Verbose
                 if (Test-Path "$InstallDIR\sysmon\Sysmon.exe") {
                     Write-Verbose "$(Get-FormattedDate) Sysmon copied successfully."
@@ -609,8 +612,8 @@ function Install-ElasticAgent {
 
                 } else {
                     $tokenVars = Show-TokenForm
-                    $token = $tokenVars[0]
-                    $fleetURL = $tokenVars[1]
+                    $token = $tokenVars[0].Trim()
+                    $fleetURL = $tokenVars[1].Trim()
                     if (($null -ne $token) -or ($null -ne $fleetURL)) {
                         Write-Verbose "$(Get-FormattedDate) Tokens were provided"
                     } else {
