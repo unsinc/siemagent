@@ -7,7 +7,7 @@ Deployment scrip will perform following tasks:
 1. Uninstall Sysmon 32 bit from the system.
 2. Install Sysmon 64bit on the system.
 3. Install and enforce proprietary Sysmon64 config file.
-4. Deploy UNS SIEM Agent and require enrollment-token/URL input from the user, if inputs are not given on the CLI.
+4. Deploy UNS SIEM Agent and require enrollment-token/URL input from the user, if values are not passed with -token or -fleetURL parameters.
 
 
 .NOTES
@@ -15,19 +15,28 @@ File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
 Prerequisite   : PowerShell V5
 Copyright	   : 2024, UNS Inc
-Version		   : 2024.01.15
+Version		   : 2024.01.30
 
 .EXAMPLE
-.\SiemAgentInstaller.ps1 -token <elastic enrollment token>
+.\SiemAgentInstaller.ps1 -Verbose
+
+.EXAMPLE
+.\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose
+
+.EXAMPLE
+For additioanal help "Get-Help .\SiemAgentInstaller.ps1 -Online"
+
+.LINK
+https://github.com/unsinc/siemagent/blob/main/README.md
 
 .PARAMETER token
 Use this switch to provide an enrollment token, enabling the registration of new UNS nodes to a specific UNS SIEM instance.
 
 .PARAMETER fleetURL
-Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM instance. Format is: https://750258aff4014f51a3fvc4a9d68bf5f.fleet.us-east-1.aws.elastic-cloud.com:443
+Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM instance. Format is: https://750258aff4014f51a3fvc4a9d68bf5f.fleet.us-east-1.aws.elastic-cloud.com
 
 .PARAMETER logpath
-Use this switch to direct the log/data output to the specified directory.
+Use this switch to direct the log/data output to the specified directory. By default environment temp path will be used.
 
 #>
 [CmdletBinding()]
@@ -46,21 +55,14 @@ param
 
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
+
+#check if invalid parameter was passed on the console
 if($invalid_parameter)
 {
     Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\SiemAgentInstaller.ps1"
     throw
 
 }
-
-# Check if the script is running with elevated privileges
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    # Relaunch the script with elevated privileges
-    Write-Output "[-] Administrator privileges required."
-    Start-Sleep 5
-    exit
-}
-
 # Time function
 function Get-FormattedDate {
     Get-Date -Format "yyyyMMdd_HHmmss"
@@ -71,19 +73,29 @@ function Get-FormattedDate {
     # For more information see Get-Date - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/get-date?view=powershell-7.4
 }
 
+# Check if the script is running with elevated privileges
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    # Relaunch the script with elevated privileges
+    Write-Output "$(Get-FormattedDate) Administrator privileges required. Please restart as Administrator"
+    Start-Sleep 5
+    exit
+}
 
 ## setttings ##
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# check if fleetURL was passed on the console
 if ($fleetURL) {
 Write-Verbose "$(Get-FormattedDate) URL is: $fleetURL"
 }
+# check if token was passed on the console
 if ($token) {
-Write-Verbose "$(Get-FormattedDate) oken is: $token"
+Write-Verbose "$(Get-FormattedDate) token is: $token"
 }
 
+# get current location so we can return to it after the deployment.
 $currentLocation = Get-Location
 $InitialLocation = $currentLocation
-Write-Verbose -Message "$(Get-FormattedDate) Initial location is: $($InitialLocation)"
+Write-Verbose "$(Get-FormattedDate) Initial location is: $($InitialLocation)"
 
 #Perform spelling check and create logpath folder for all further actions.
 [String]$logpath = $logpath -replace '\\\\+', '\'
@@ -95,11 +107,13 @@ if ($logpath) {
 
         [String]$logpath = $logpath.Trim(), $unsfiles -join ''
         Write-Verbose "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
-
+        Write-Output "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
+        Write-Debug $_
     } else {
         
         [String]$logpath = $logpath.Trim(), "\", $unsfiles -join ''
         Write-Verbose "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
+        Write-Output "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
     }
     if (Test-Path $logpath) {
         Write-Verbose "$(Get-FormattedDate) $logpath directory exist."
@@ -109,13 +123,13 @@ if ($logpath) {
         }
         catch [System.IO.PathTooLongException] {
             $errorMessage = "File Path too long. Maximum allowed characters 256."
-            throw $errorMessage
+            Write-Error $errorMessage -ErrorAction Stop
             Start-Sleep 5
             exit
         }
         catch {
             $errorMessage = $_.Exception
-            Write-Output "$(Get-FormattedDate) $logpath folder creation failed because of: $errorMessage"
+            Write-Error "$(Get-FormattedDate) $logpath folder creation failed because of: $errorMessage"
             Start-Sleep 5
             exit
         }
@@ -125,13 +139,14 @@ if ($logpath) {
     Write-Verbose -Message "$(Get-FormattedDate) Default LogPath is: $logpath"
 }
 
+#start transcript logging.
 $transcriptFilePath = Join-Path -Path $logpath -ChildPath "UNSAgent_Installer_Transcript_$(Get-FormattedDate).txt"
 Start-Transcript -Path $transcriptFilePath
-
 
 # Download folder in case files are being downloaded from internet.
 $downloadFolder = $logpath
 Write-Verbose -Message "$(Get-FormattedDate) Download Folder is: $downloadFolder"
+Write-Output "$(Get-FormattedDate) Download Folder is: $downloadFolder"
 
 #Default Install Directory
 $InstallDIR = $env:programfiles + '\UNS SIEM Agent'
@@ -139,8 +154,8 @@ if (Test-Path $InstallDIR) {
     "Exist" | Out-Null
 } else {
     try {
-        New-Item -Path $InstallDIR -ItemType Directory
-        Write-Output "Setting up Install DIR to $($InstallDIR)" 
+        New-Item -Path $InstallDIR -ItemType Directory -Force
+        Write-Output "Setting up Install DIR to $($InstallDIR)"
         Write-Verbose -Message "$(Get-FormattedDate) Default Installation Directory is: $InstallDIR"
     }
     catch {
@@ -225,7 +240,7 @@ foreach ($i in 0..($agentPaths.Length - 1)) {
     Write-Verbose "$(Get-FormattedDate) Agent Path $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
 }
 
-
+Write-Output "$(Get-FormattedDate) Downloading required deployment files, please be patient."
 # Function to download files from the internet
 function Get-UNSFiles($downloadUrl, $installPath) {
     $retryCount = 0
@@ -253,24 +268,26 @@ function Get-UNSFiles($downloadUrl, $installPath) {
 # Download files
 for ($i=0; $i -lt $downloadUrls.Length; $i++) {
     Write-Verbose "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
+    #Write-Output "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
     Get-UNSFiles -downloadUrl $downloadUrls[$i] -installPath $agentPaths[$i]
 }
 
 # Create necessary directories
+
 try {
     $directories = @("sysmon", "configs")
 
     foreach ($dir in $directories) {
         $dirPath = Join-Path -Path $InstallDIR -ChildPath $dir
         if (-not (Test-Path $dirPath)) {
+            Write-Output "$(Get-FormattedDate) Creating necessary folders .."
             New-Item -Path $dirPath -ItemType Directory -Force -ErrorAction Stop
-            Write-Output "$dir folder created successfully." 
+            Write-Output "$dir created successfully." 
             Write-Verbose "$(Get-FormattedDate) $dir folder created successfully."
         } else {
             Write-Verbose "$(Get-FormattedDate) $dir directory exists"
         }
     }
-
 }
 catch {
     $errorMessage = $_.Exception.Message
@@ -284,6 +301,7 @@ function CopyFilesToDir {
     do {
         try {
             if (-not (Test-Path "$InstallDIR\sysmon\Sysmon.exe")) {
+                Write-Output "$(Get-FormattedDate) $($dirPath) created."
                 Expand-Archive -Path $logpath\Sysmon.zip -DestinationPath $InstallDIR\sysmon -ErrorAction Stop -Verbose
                 if (Test-Path "$InstallDIR\sysmon\Sysmon.exe") {
                     Write-Verbose "$(Get-FormattedDate) Sysmon copied successfully."
@@ -372,6 +390,7 @@ function Uninstall-Perch {
     $arguments = "/X{18B16389-F8F8-4E48-9E78-A043D5742B99}"
         try {
             Write-Verbose "$timestamp Uninstalling Perch agent"
+            Write-Output "$timestamp Uninstalling Perch agent"
             $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "$arguments" -NoNewWindow -PassThru
             $handle = $process.Handle  # Cache the process handle
             $process.WaitForExit()
@@ -553,6 +572,7 @@ function Install-ElasticAgent {
 
                 #Unzipping files
                 Write-Verbose "$(Get-FormattedDate) Unzipping agent files, it will take few seconds..."
+                Write-Output "$(Get-FormattedDate) Unzipping agent files, it will take few seconds..."
                 try {
                     # Try unzipping the files
                     Write-Verbose "$(Get-FormattedDate) LogPath is $logpath"
@@ -563,6 +583,7 @@ function Install-ElasticAgent {
                     
                     Start-Sleep -Milliseconds 500
                     Write-Verbose "$(Get-FormattedDate) All files were unzipped, installing agent..."
+                    Write-Output "$(Get-FormattedDate) Files were unzipped, installing siem agent..."
                 }
                 catch {
                     $errorMessage = $_.Exception
@@ -593,8 +614,8 @@ function Install-ElasticAgent {
 
                 } else {
                     $tokenVars = Show-TokenForm
-                    $token = $tokenVars[0]
-                    $fleetURL = $tokenVars[1]
+                    $token = $tokenVars[0].Trim()
+                    $fleetURL = $tokenVars[1].Trim()
                     if (($null -ne $token) -or ($null -ne $fleetURL)) {
                         Write-Verbose "$(Get-FormattedDate) Tokens were provided"
                     } else {
@@ -609,16 +630,33 @@ function Install-ElasticAgent {
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
+            Write-Output "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
+            Write-Output "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
             
             # additional check if token was provided and value is not null
             if ($null -eq $token) {
-                Write-Verbose "$(Get-FormattedDate) Token issues after token forms"
+                Write-Error "$(Get-FormattedDate) Token issues after token forms"
                 exit
 
             } else {
                 # installing elastic services
                 try {
                     Write-Verbose "$(Get-FormattedDate) Installing UNS SIEM Agent..."
+                    Write-Output "$(Get-FormattedDate) Installing UNS SIEM Agent..."
+
+                #Delete existing service if exists. It helps during redeployment.
+                if ($null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)) {
+                    Write-Output "$(Get-FormattedDate) Removing old agent service, please wait"
+                    try {
+                        Stop-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue
+                        sc.exe delete "Elastic Agent"
+                    }
+                    catch {
+                        Write-Error "Siem agent removal failed, we will try again during deployment of current version."
+                    }
+                    Write-Output "$(Get-FormattedDate) Old agent service removed, deploying UNS SIEM Agent"
+                }
+
                 # Insalling UNS SIEM Agent
                 $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
                 $handle = $process.Handle  # Cache the process handle
@@ -787,6 +825,9 @@ finally {
     Push-Location -LiteralPath $InitialLocation
     Stop-Transcript -ErrorAction SilentlyContinue
     Write-Verbose "$(Get-FormattedDate) All temp files were removed."
-
+    Write-Output "$(Get-FormattedDate) All temp files were removed."
+    Write-Output "$(Get-FormattedDate) Good bye"
+    Start-Sleep 5
+    exit
 }
 ### END ACTIN ###
