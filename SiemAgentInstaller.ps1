@@ -709,7 +709,7 @@ function Install-ElasticAgent {
 
                         }
                         catch {
-                            $errorMessage = $_.Exception
+                            $errorMessage = $_.Exception.Message
                             Write-Error $errorMessage -ErrorAction Stop
                             exit
                         }
@@ -811,7 +811,7 @@ try {
             }
         }
         catch {
-            $errorMessage = $_.Exception
+            $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) UNS Agent Update Task creation failed because of $($errorMessage)"
             break
         }
