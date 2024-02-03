@@ -63,6 +63,7 @@ if($invalid_parameter)
     throw
 
 }
+
 # Time function
 function Get-FormattedDate {
     Get-Date -Format "yyyyMMdd_HHmmss"
@@ -128,7 +129,7 @@ if ($logpath) {
             exit
         }
         catch {
-            $errorMessage = $_.Exception
+            $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) $logpath folder creation failed because of: $errorMessage"
             Start-Sleep 5
             exit
@@ -159,7 +160,7 @@ if (Test-Path $InstallDIR) {
         Write-Verbose -Message "$(Get-FormattedDate) Default Installation Directory is: $InstallDIR"
     }
     catch {
-        $errorMessage = $_.Exception
+        $errorMessage = $_.Exception.Message
         Write-Output "Creating folders failed because: $errorMessage"
     }
 }
@@ -252,7 +253,7 @@ function Get-UNSFiles($downloadUrl, $installPath) {
             $downloadSuccessful = $true
         }
         catch {
-            $errorMessage = $_.Exception
+            $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) Failed to download files for following reasons: $errorMessage"
             $downloadSuccessful = $false
             $retryCount++
@@ -282,7 +283,6 @@ try {
         if (-not (Test-Path $dirPath)) {
             Write-Output "$(Get-FormattedDate) Creating necessary folders .."
             New-Item -Path $dirPath -ItemType Directory -Force -ErrorAction Stop
-            Write-Output "$dir created successfully." 
             Write-Verbose "$(Get-FormattedDate) $dir folder created successfully."
         } else {
             Write-Verbose "$(Get-FormattedDate) $dir directory exists"
@@ -586,7 +586,7 @@ function Install-ElasticAgent {
                     Write-Output "$(Get-FormattedDate) Files were unzipped, installing siem agent..."
                 }
                 catch {
-                    $errorMessage = $_.Exception
+                    $errorMessage = $_.Exception.Message
                     Write-Error "$(Get-FormattedDate) Agent files copy failed because of $($errorMessage)" -ErrorAction Stop
                     break
                 }
@@ -669,12 +669,16 @@ function Install-ElasticAgent {
                     }
                 }
                 catch {
-                    $errorMessage = $_.Exception
+                    $errorMessage = $_.Exception.Message
                     Write-Output "$(Get-FormattedDate) Installation failed because of $($errorMessage)"
                     exit
                 }
                 # destroy the handle cache
                 $null = $handle
+
+                #Sleep 3 seconds before attempting to stop services.
+                Start-Sleep 3
+
                 #modifying services
                 if (Get-Service -ServiceName "Elastic Agent") {
                     try {
@@ -685,11 +689,11 @@ function Install-ElasticAgent {
                         Write-Verbose "$(Get-FormattedDate) Stopping elastic agent service"
                         try {
                             # stopping the agent
-                            Stop-Service -ServiceName "Elastic Agent" -ErrorAction Stop 
+                            Stop-Service -ServiceName "Elastic Agent" -Force -Confirm:$false -ErrorAction Stop
                             
                         }
                         catch {
-                            $errorMessage = $_.Exception
+                            $errorMessage = $_.Exception.Message
                             Write-Error $errorMessage -ErrorAction Stop
                             exit
                         }
@@ -700,12 +704,12 @@ function Install-ElasticAgent {
                         Write-Verbose "$(Get-FormattedDate) Renaming elastic agent service name"
                         try {
 
-                            Set-Service -ServiceName "Elastic Agent" -DisplayName "UNS SIEM Agent" -ErrorAction Stop
-                            Set-Service -ServiceName "Elastic Agent" -Description "UNS SIEM Agent is a unified agent to observe, monitor and protect your system."
+                            Set-Service -ServiceName "Elastic Agent" -DisplayName "UNS SIEM Agent" -ErrorAction Stop -Force -Confirm:$false
+                            Set-Service -ServiceName "Elastic Agent" -Description "UNS SIEM Agent is a unified agent to observe, monitor and protect your system." -Force -Confirm:$false
 
                         }
                         catch {
-                            $errorMessage = $_.Exception
+                            $errorMessage = $_.Exception.Message
                             Write-Error $errorMessage -ErrorAction Stop
                             exit
                         }
@@ -717,10 +721,10 @@ function Install-ElasticAgent {
                         #Atetmpting to start uns siem agent
                         Write-Verbose "$(Get-FormattedDate) Attempting to start UNS SIEM Agent Service"
                         try {
-                            Start-Service -ServiceName "Elastic Agent"
+                            Start-Service -ServiceName "Elastic Agent" -Force -Confirm:$false
                         }
                         catch {
-                            $errorMessage = $_.Exception
+                            $errorMessage = $_.Exception.Message
                             Write-Output $errorMessage
                             break
                         }
@@ -728,7 +732,7 @@ function Install-ElasticAgent {
     
                     }
                     catch {
-                        $errorMessage = $_.Exception
+                        $errorMessage = $_.Exception.Message
                         Write-Error "$(Get-FormattedDate) Modifying services failed because of $($errorMessage)" -ErrorAction Stop
                         Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
                         exit
@@ -737,7 +741,7 @@ function Install-ElasticAgent {
             }
         } 
         catch {
-                $errorMessage = $_.Exception
+                $errorMessage = $_.Exception.Message
                 Write-Error "$(Get-FormattedDate) UNS ElasticSIEM Agent deployment failed for following reason: $($errorMessage)" -ErrorAction Stop
                 Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
                 exit
@@ -807,7 +811,7 @@ try {
             }
         }
         catch {
-            $errorMessage = $_.Exception
+            $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) UNS Agent Update Task creation failed because of $($errorMessage)"
             break
         }
@@ -815,7 +819,7 @@ try {
 
 }
 catch {
-    $errorMessage = $_.Exception
+    $errorMessage = $_.Exception.Message
     Write-Error "$(Get-FormattedDate) UNS ElasticSIEM Agent deployment failed because of $($errorMessage)"
     break
 }
