@@ -269,7 +269,6 @@ function Get-UNSFiles($downloadUrl, $installPath) {
 # Download files
 for ($i=0; $i -lt $downloadUrls.Length; $i++) {
     Write-Verbose "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
-    #Write-Output "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
     Get-UNSFiles -downloadUrl $downloadUrls[$i] -installPath $agentPaths[$i]
 }
 
@@ -648,7 +647,7 @@ function Install-ElasticAgent {
                 if ($null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)) {
                     Write-Output "$(Get-FormattedDate) Removing old agent service, please wait"
                     try {
-                        Stop-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue
+                        Stop-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue -Force -Confirm:$false
                         sc.exe delete "Elastic Agent"
                     }
                     catch {
@@ -697,6 +696,7 @@ function Install-ElasticAgent {
                             Write-Error $errorMessage -ErrorAction Stop
                             exit
                         }
+
                         Write-Verbose "$(Get-FormattedDate) Elastic agent service stopped."
                         
                         Start-Sleep -Milliseconds 500
@@ -704,12 +704,16 @@ function Install-ElasticAgent {
                         Write-Verbose "$(Get-FormattedDate) Renaming elastic agent service name"
                         try {
 
-                            Set-Service -ServiceName "Elastic Agent" -DisplayName "UNS SIEM Agent" -ErrorAction Stop -Force -Confirm:$false
-                            Set-Service -ServiceName "Elastic Agent" -Description "UNS SIEM Agent is a unified agent to observe, monitor and protect your system." -Force -Confirm:$false
-
+                            Set-Service -ServiceName "Elastic Agent" -DisplayName "UNS SIEM Agent" -ErrorAction Stop
+                            Set-Service -ServiceName "Elastic Agent" -Description "UNS SIEM Agent is a unified agent to observe, monitor and protect your system."
+ 
                         }
                         catch {
                             $errorMessage = $_.Exception.Message
+                            [int]$retryCount = 2,
+                            [int]$delay = 5
+
+
                             Write-Error $errorMessage -ErrorAction Stop
                             exit
                         }
@@ -721,7 +725,7 @@ function Install-ElasticAgent {
                         #Atetmpting to start uns siem agent
                         Write-Verbose "$(Get-FormattedDate) Attempting to start UNS SIEM Agent Service"
                         try {
-                            Start-Service -ServiceName "Elastic Agent" -Force -Confirm:$false
+                            Start-Service -ServiceName "Elastic Agent"
                         }
                         catch {
                             $errorMessage = $_.Exception.Message
