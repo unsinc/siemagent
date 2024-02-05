@@ -710,11 +710,7 @@ function Install-ElasticAgent {
                         }
                         catch {
                             $errorMessage = $_.Exception.Message
-                            [int]$retryCount = 2,
-                            [int]$delay = 5
-
-
-                            Write-Error $errorMessage -ErrorAction Stop
+                            Write-Error "$(Get-FormattedDate) Installation failed because of $($errorMessage)" -ErrorAction Stop
                             exit
                         }
 
