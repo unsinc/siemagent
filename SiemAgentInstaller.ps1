@@ -386,10 +386,10 @@ function Uninstall-Sysmon32 {
 # Uninstall Perch
 function Uninstall-Perch {
     param()
-    $arguments = "/X{18B16389-F8F8-4E48-9E78-A043D5742B99}"
+    $arguments = "/X {18B16389-F8F8-4E48-9E78-A043D5742B99} /qn"
         try {
-            Write-Verbose "$timestamp Uninstalling Perch agent"
-            Write-Output "$timestamp Uninstalling Perch agent"
+            Write-Verbose "$(Get-FormattedDate) Uninstalling Perch agent"
+            Write-Output "$(Get-FormattedDate) Uninstalling Perch agent"
             $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "$arguments" -NoNewWindow -PassThru
             $handle = $process.Handle  # Cache the process handle
             $process.WaitForExit()
