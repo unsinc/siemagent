@@ -676,7 +676,7 @@ function Install-ElasticAgent {
                 $null = $handle
 
                 #Sleep 3 seconds before attempting to stop services.
-                Start-Sleep 3
+                Start-Sleep -Seconds 3
 
                 #modifying services
                 if (Get-Service -ServiceName "Elastic Agent") {
