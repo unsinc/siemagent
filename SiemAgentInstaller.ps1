@@ -39,7 +39,7 @@ Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM inst
 Use this switch to indicate where deployment files are. If this switch is used, installer will not download files, but instead grab them from the indicated folder.
 
 .PARAMETER noDownload
-To be used with $datapth. When passed, script will look for files stored under datapath.
+To be used with $datapth. When passed, script will look for files stored under datapath. If no datapath is specified while passing noDownload, datapath will default to current script location.
 
 
 #>
@@ -77,6 +77,11 @@ if($invalid_parameter)
 #datapath = (Get-Location)
 #noDownload = $true
 ###########################################################################################
+
+if (($noDownload) -and (-not $datapath)) {
+    Write-Verbose "-noDownload was provided without -datapath. dataPath will default to current script location."
+    $datapath = (Get-Location)
+}
 
 # Check dotnet version installed.
 $DotNetVersionKey = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP' -Recurse | Get-ItemProperty -EA 0 -name Version | Where-Object { $_.PSChildName -match '^(?!Setup)[\d\.]+' } | Select-Object -Property PSChildName, Version | Sort-Object Version -Descending | Select-Object -First 1
@@ -328,7 +333,6 @@ function Get-UNSFiles($downloadUrl, $installPath) {
         exit
     }
 }
-
 
 # verify if $noDownload
 if ($noDownload) {
