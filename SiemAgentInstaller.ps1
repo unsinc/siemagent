@@ -15,7 +15,7 @@ File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
 Prerequisite   : PowerShell V5
 Copyright	   : 2024, UNS Inc
-Version		   : 2024.03.12
+Version		   : 2024.03.12.3
 
 .EXAMPLE
 .\SiemAgentInstaller.ps1 -Verbose
@@ -35,11 +35,12 @@ Use this switch to provide an enrollment token, enabling the registration of new
 .PARAMETER fleetURL
 Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM instance. Format is: https://750258aff4014f51a3fvc4a9d68bf5f.fleet.us-east-1.aws.elastic-cloud.com
 
-.PARAMETER logpath
-Use this switch to direct the log/data output to the specified directory. By default environment temp path will be used.
-
-.PARAMETER filesource
+.PARAMETER datapath
 Use this switch to indicate where deployment files are. If this switch is used, installer will not download files, but instead grab them from the indicated folder.
+
+.PARAMETER noDownload
+To be used with $datapth. When passed, script will look for files stored under datapath.
+
 
 #>
 [CmdletBinding()]
@@ -54,10 +55,10 @@ param
 	[string[]]$fleetURL,
 
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
-	[string[]]$logpath,
+	[string[]]$datapath,
 
-    [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
-	[string[]]$filesource,
+    [Parameter(Mandatory = $false)]
+    [switch]$noDownload,
 
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
@@ -69,6 +70,19 @@ if($invalid_parameter)
     throw
 
 }
+
+######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
+#$fleetURL = ""
+#$token = ""
+#$datapath = (Get-Location)
+#$noDownload = $true
+###########################################################################################
+
+# Check dotnet version installed.
+$DotNetVersionKey = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP' -Recurse | Get-ItemProperty -EA 0 -name Version | Where-Object { $_.PSChildName -match '^(?!Setup)[\d\.]+' } | Select-Object -Property PSChildName, Version | Sort-Object Version -Descending | Select-Object -First 1
+$Version = New-Object Version($DotNetVersionKey.Version)
+$RequiredVersion = New-Object Version("4.5")
+
 
 # Time function
 function Get-FormattedDate {
@@ -105,29 +119,27 @@ $InitialLocation = $currentLocation
 Write-Verbose "$(Get-FormattedDate) Initial location is: $($InitialLocation)"
 
 #Perform spelling check and create logpath folder for all further actions.
-[String]$logpath = $logpath -replace '\\\\+', '\'
-[String]$logpath = $logpath -replace '\\+$', '\'
+#Perform spelling check and create logpath folder for all further actions.
+[String]$datapath = $datapath -replace '\\\\+', '\'
+[String]$datapath = $datapath -replace '\\+$', '\'
 
-if ($logpath) {
+
+if ($datapath) {
     [String]$unsfiles = "UNSFiles\"
-    if ($logpath -like "*\") {
-
-        [String]$logpath = $logpath.Trim(), $unsfiles -join ''
-        Write-Verbose "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
-        Write-Output "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
-        Write-Debug $_
-    } else {
-        
-        [String]$logpath = $logpath.Trim(), "\", $unsfiles -join ''
-        Write-Verbose "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
-        Write-Output "$(Get-FormattedDate) Custom Log Path selected. Log path will be $logpath"
+    if ($datapath -notlike "*$unsfiles") {
+        if ($datapath -like "*\") {
+            [String]$datapath = $datapath.Trim(), $unsfiles -join ''
+        } else {
+            [String]$datapath = $datapath.Trim(), "\", $unsfiles -join ''
+        }
     }
-    if (Test-Path $logpath) {
-        Write-Verbose "$(Get-FormattedDate) $logpath directory exist."
+    Write-Verbose "$(Get-FormattedDate) Custom data path selected. Log path will be $datapath"
+    Write-Output "$(Get-FormattedDate) Custom data path selected. Log path will be $datapath"
+    if (Test-Path $datapath) {
+        Write-Verbose "$(Get-FormattedDate) $datapath directory exist."
     } else {
         try {
-            New-Item -Path $logpath -ItemType Directory -Force -ErrorAction Stop
-            mkdir -Path $logpath -Force -ErrorAction SilentlyContinue
+            New-Item -Path $datapath -ItemType Directory -Force -ErrorAction Stop
         }
         catch [System.IO.PathTooLongException] {
             $errorMessage = "File Path too long. Maximum allowed characters 256."
@@ -137,30 +149,29 @@ if ($logpath) {
         }
         catch {
             $errorMessage = $_.Exception.Message
-            Write-Error "$(Get-FormattedDate) $logpath folder creation failed because of: $errorMessage"
+            Write-Error "$(Get-FormattedDate) $datapath folder creation failed because of: $errorMessage"
             Start-Sleep 5
             exit
         }
     }
 } else {
-    [String]$logpath = $env:temp.Trim(), "\UNSFiles\" -join ''
-    Write-Verbose -Message "$(Get-FormattedDate) Default LogPath is: $logpath"
-    if (Test-Path $logpath) {
-        Write-Verbose "$(Get-FormattedDate) $logpath directory exist."
+    [String]$datapath = $env:temp.Trim(), "\UNSFiles\" -join ''
+    Write-Verbose -Message "$(Get-FormattedDate) Default LogPath is: $datapath"
+    if (Test-Path $datapath) {
+        Write-Verbose "$(Get-FormattedDate) $datapath directory exist."
     } else {
         try {
-            New-Item -Path $logpath -ItemType Directory -Force -ErrorAction Stop
-            mkdir -Path $logpath -Force -ErrorAction SilentlyContinue
+            New-Item -Path $datapath -ItemType Directory -Force -ErrorAction Stop
         }
         catch [System.IO.PathTooLongException] {
-            $errorMessage = "File Path too long. Maximum allowed characters 256."
+            $errorMessage = "Data path too long. Maximum allowed characters 256."
             Write-Error $errorMessage -ErrorAction Stop
             Start-Sleep 5
             exit
         }
         catch {
             $errorMessage = $_.Exception.Message
-            Write-Error "$(Get-FormattedDate) $logpath folder creation failed because of: $errorMessage"
+            Write-Error "$(Get-FormattedDate) $datapath folder creation failed because of: $errorMessage"
             Start-Sleep 5
             exit
         }
@@ -169,11 +180,11 @@ if ($logpath) {
 
 #start transcript logging.
 
-$transcriptFilePath = Join-Path -Path $logpath -ChildPath "UNSAgent_Installer_Transcript_$(Get-FormattedDate).txt"
+$transcriptFilePath = Join-Path -Path $datapath -ChildPath "UNSAgent_Installer_Transcript_$(Get-FormattedDate).txt"
 Start-Transcript -Path $transcriptFilePath
 
 # Download folder in case files are being downloaded from internet.
-$downloadFolder = $logpath
+$downloadFolder = $datapath
 Write-Verbose -Message "$(Get-FormattedDate) Download Folder is: $downloadFolder"
 Write-Output "$(Get-FormattedDate) Download Folder is: $downloadFolder"
 
@@ -210,7 +221,7 @@ function Remove-ElasticLeftovers {
         }
 		foreach ($item in $items) {
 			if (Test-Path $item -PathType Any) {
-                Write-Debug "$(Get-FormattedDate) Removing $item."
+                Write-Debug "$(Get-FormattedDate) Removing $item." -ErrorAction SilentlyContinue
 				Remove-Item -Path $item -Recurse -Force -ErrorAction SilentlyContinue -Exclude "*.log"
 			}
 		}
@@ -260,7 +271,7 @@ foreach ($url in $originalLinks) {
     } else {
         $downloadUrls += $url
     }	
-    Write-Debug "Modified URL: $downloadUrls"
+    Write-Debug "Modified URL: $downloadUrls" -ErrorAction SilentlyContinue
 }
 
 $agentFiles = @(
@@ -270,7 +281,7 @@ $agentFiles = @(
     "logo.ico",
     "logo.png"
 )
-$agentPaths = $agentFiles | ForEach-Object { Join-Path $logpath $_ }
+$agentPaths = $agentFiles | ForEach-Object { Join-Path $datapath $_ }
 foreach ($i in 0..($agentPaths.Length - 1)) {
     Write-Verbose "$(Get-FormattedDate) Agent Path $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
 }
@@ -319,10 +330,20 @@ function Get-UNSFiles($downloadUrl, $installPath) {
 }
 
 
-# Download files
-for ($i=0; $i -lt $downloadUrls.Length; $i++) {
-    Write-Verbose "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
-    Get-UNSFiles -downloadUrl $downloadUrls[$i] -installPath $agentPaths[$i]
+# verify if $noDownload
+if ($noDownload) {
+    Write-Verbose "$(Get-FormattedDate) `$noDownload switch provided. Looking for files in $($datapath.TrimEnd('UNSFiles\'))"
+    # Get all files in the directory
+    $mfiles = Get-ChildItem -Path $($datapath.TrimEnd('UNSFiles\')) -File -ErrorAction SilentlyContinue
+    foreach ($tfile in $mfiles) {Move-Item $tfile -Destination $datapath}
+    Rename-Item -Path $datapath\$((Get-ChildItem $datapath -Filter *elastic*-agent*).Name) -NewName uns-agent.zip -Force -ErrorAction Stop
+}
+else {
+# Download files in case $data source is not provided.
+    for ($i=0; $i -lt $downloadUrls.Length; $i++) {
+        Write-Verbose "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
+        Get-UNSFiles -downloadUrl $downloadUrls[$i] -installPath $agentPaths[$i]
+    }
 }
 
 # Create necessary directories
@@ -355,17 +376,28 @@ function CopyFilesToDir {
         try {
             if (-not (Test-Path "$InstallDIR\sysmon\Sysmon.exe")) {
                 Write-Output "$(Get-FormattedDate) $($dirPath) created."
-                Write-Verbose "$(Get-FormattedDate) Unzipping $logpath\Sysmon.zip to $InstallDIR\sysmon"
-                
-                #Check what PS version we are using.
-                if ($PSVersionTable.PSVersion.Major -lt 5) {
-                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version less than 5, using .NET framework classes to unpack"
-                    Add-Type -assembly "system.io.compression.filesystem"
-                    [io.compression.zipfile]::ExtractToDirectory("$logpath\Sysmon.zip", "$InstallDIR\sysmon")
+                Write-Verbose "$(Get-FormattedDate) Unzipping $datapath\Sysmon.zip to $InstallDIR\sysmon"
+
+                if ($Version -ge $RequiredVersion) {
+                    # Execute the command for .NET Framework 4.5 and above
+                    #Check what PS version we are using.
+                    if ($PSVersionTable.PSVersion.Major -lt 5) {
+                        Write-Verbose "$(Get-FormattedDate) This is PowerShell version less than 5, using .NET framework classes to unpack"
+                        Add-Type -assembly "system.io.compression.filesystem"
+                        [io.compression.zipfile]::ExtractToDirectory("$datapath\Sysmon.zip", "$InstallDIR\sysmon")
+                    } else {
+                        Write-Verbose "$(Get-FormattedDate) This is PowerShell version 5 unziping via Expand-Archive"
+                        Expand-Archive -Path $datapath\Sysmon.zip -DestinationPath $InstallDIR\sysmon -ErrorAction Stop -Verbose
+                    }
                 } else {
-                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version 5 unziping via Expand-Archive"
-                    Expand-Archive -Path $logpath\Sysmon.zip -DestinationPath $InstallDIR\sysmon -ErrorAction Stop -Verbose
+                    Write-Verbose "$(Get-FormattedDate) DOTNET version is below 4.5 Using COM Shell Application to Expand"
+                    # Execute the command for .NET Framework versions below 4.5
+                    $shell = New-Object -ComObject Shell.Application
+                    $zip = $shell.NameSpace("$datapath\Sysmon.zip")
+                    $destination = $shell.NameSpace("$InstallDIR\sysmon")
+                    $destination.CopyHere($zip.Items(), 0x10)
                 }
+                
 
                 # Verify if files were extracted.
                 if (Test-Path "$InstallDIR\sysmon\Sysmon.exe") {
@@ -383,7 +415,7 @@ function CopyFilesToDir {
             }
 
             try {
-                Copy-Item "$logpath\UNS-Sysmon.xml" -Destination "$InstallDIR\configs\" -ErrorAction Stop
+                Copy-Item "$datapath\UNS-Sysmon.xml" -Destination "$InstallDIR\configs\" -ErrorAction Stop
                 $copySuccessful = $true
             }
             catch {
@@ -640,21 +672,31 @@ function Install-ElasticAgent {
                 Write-Output "$(Get-FormattedDate) Unzipping agent files, it will take few seconds..."
                 try {
                     # Try unzipping the files
-                    Write-Verbose "$(Get-FormattedDate) LogPath is $logpath"
-                    $archiveFile = $logpath.Trim() + $agentFiles[2].Trim()
+                    Write-Verbose "$(Get-FormattedDate) LogPath is $datapath"
+                    $archiveFile = $datapath.Trim() + $agentFiles[2].Trim()
                     Write-Verbose "$(Get-FormattedDate) Archive file is $archiveFile"
 
-                #Check what PS version we are using.
-                if ($PSVersionTable.PSVersion.Major -lt 5) {
-                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version less than V5, using .NET framework classes to unpack"
-                    Add-Type -assembly "system.io.compression.filesystem"
-                    [io.compression.zipfile]::ExtractToDirectory("$archiveFile", "$logpath")
-                } else {
-                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version V5 or above, unziping via Expand-Archive"
-                    Expand-Archive $archiveFile -DestinationPath $logpath -Force -ErrorAction Stop
-                }
 
-                    $agentinstallPath = $logpath.Trim() + (Get-Item -Path $logpath\elastic-agent-*).Name
+                    if ($Version -ge $RequiredVersion) {
+                        # Execute the command for .NET Framework 4.5 and above
+                        #Check what PS version we are using.
+                        if ($PSVersionTable.PSVersion.Major -lt 5) {
+                            Write-Verbose "$(Get-FormattedDate) This is PowerShell version less than V5, using .NET framework classes to unpack"
+                            Add-Type -assembly "system.io.compression.filesystem"
+                            [io.compression.zipfile]::ExtractToDirectory("$archiveFile", "$datapath")
+                        } else {
+                            Write-Verbose "$(Get-FormattedDate) This is PowerShell version V5 or above, unziping via Expand-Archive"
+                            Expand-Archive $archiveFile -DestinationPath $datapath -Force -ErrorAction Stop
+                        }
+                    } else {
+                        Write-Verbose "$(Get-FormattedDate) DOTNET version is below 4.5 Using COM Shell Application to Expand"
+                        $shell = New-Object -ComObject Shell.Application
+                        $zip = $shell.NameSpace($zipFilePath)
+                        $destination = $shell.NameSpace($extractPath)
+                        $destination.CopyHere($zip.Items(), 0x10)
+                    }
+                    
+                    $agentinstallPath = $datapath.Trim() + (Get-Item -Path $datapath\elastic-agent-*).Name
                     
                     Start-Sleep -Milliseconds 500
                     Write-Verbose "$(Get-FormattedDate) All files were unzipped, installing agent..."
@@ -900,7 +942,7 @@ catch {
     break
 }
 finally {
-    Remove-ElasticLeftovers -path $logpath
+    Remove-ElasticLeftovers -path $datapath
     Write-Verbose "$(Get-FormattedDate) Going back to initial location: $($InitialLocation)" 
     Push-Location -LiteralPath $InitialLocation
     Stop-Transcript -ErrorAction SilentlyContinue
