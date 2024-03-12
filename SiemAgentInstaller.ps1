@@ -15,7 +15,7 @@ File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
 Prerequisite   : PowerShell V5
 Copyright	   : 2024, UNS Inc
-Version		   : 2024.01.30
+Version		   : 2024.03.12
 
 .EXAMPLE
 .\SiemAgentInstaller.ps1 -Verbose
@@ -38,7 +38,7 @@ Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM inst
 .PARAMETER logpath
 Use this switch to direct the log/data output to the specified directory. By default environment temp path will be used.
 
-.PARAMETER filesource
+.PARAMETER datasource
 Use this switch to indicate where deployment files are. If this switch is used, installer will not download files, but instead grab them from the indicated folder.
 
 #>
@@ -57,7 +57,7 @@ param
 	[string[]]$logpath,
 
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
-	[string[]]$filesource,
+	[string[]]$datasource,
 
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
@@ -69,6 +69,12 @@ if($invalid_parameter)
     throw
 
 }
+
+# check dotnet version installed.
+$DotNetVersionKey = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP' -Recurse | Get-ItemProperty -EA 0 -name Version | Where-Object { $_.PSChildName -match '^(?!Setup)[\d\.]+' } | Select-Object -Property PSChildName, Version | Sort-Object Version -Descending | Select-Object -First 1
+$Version = New-Object Version($DotNetVersionKey.Version)
+$RequiredVersion = New-Object Version("4.5")
+
 
 # Time function
 function Get-FormattedDate {
@@ -356,16 +362,27 @@ function CopyFilesToDir {
             if (-not (Test-Path "$InstallDIR\sysmon\Sysmon.exe")) {
                 Write-Output "$(Get-FormattedDate) $($dirPath) created."
                 Write-Verbose "$(Get-FormattedDate) Unzipping $logpath\Sysmon.zip to $InstallDIR\sysmon"
-                
-                #Check what PS version we are using.
-                if ($PSVersionTable.PSVersion.Major -lt 5) {
-                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version less than 5, using .NET framework classes to unpack"
-                    Add-Type -assembly "system.io.compression.filesystem"
-                    [io.compression.zipfile]::ExtractToDirectory("$logpath\Sysmon.zip", "$InstallDIR\sysmon")
+
+                if ($Version -ge $RequiredVersion) {
+                    # Execute the command for .NET Framework 4.5 and above
+                    #Check what PS version we are using.
+                    if ($PSVersionTable.PSVersion.Major -lt 5) {
+                        Write-Verbose "$(Get-FormattedDate) This is PowerShell version less than 5, using .NET framework classes to unpack"
+                        Add-Type -assembly "system.io.compression.filesystem"
+                        [io.compression.zipfile]::ExtractToDirectory("$logpath\Sysmon.zip", "$InstallDIR\sysmon")
+                    } else {
+                        Write-Verbose "$(Get-FormattedDate) This is PowerShell version 5 unziping via Expand-Archive"
+                        Expand-Archive -Path $logpath\Sysmon.zip -DestinationPath $InstallDIR\sysmon -ErrorAction Stop -Verbose
+                    }
                 } else {
-                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version 5 unziping via Expand-Archive"
-                    Expand-Archive -Path $logpath\Sysmon.zip -DestinationPath $InstallDIR\sysmon -ErrorAction Stop -Verbose
+                    Write-Verbose "$(Get-FormattedDate) DOTNET version is below 4.5 Using COM Shell Application to Expand"
+                    # Execute the command for .NET Framework versions below 4.5
+                    $shell = New-Object -ComObject Shell.Application
+                    $zip = $shell.NameSpace("$logpath\Sysmon.zip")
+                    $destination = $shell.NameSpace("$InstallDIR\sysmon")
+                    $destination.CopyHere($zip.Items(), 0x10)
                 }
+                
 
                 # Verify if files were extracted.
                 if (Test-Path "$InstallDIR\sysmon\Sysmon.exe") {
@@ -644,16 +661,26 @@ function Install-ElasticAgent {
                     $archiveFile = $logpath.Trim() + $agentFiles[2].Trim()
                     Write-Verbose "$(Get-FormattedDate) Archive file is $archiveFile"
 
-                #Check what PS version we are using.
-                if ($PSVersionTable.PSVersion.Major -lt 5) {
-                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version less than V5, using .NET framework classes to unpack"
-                    Add-Type -assembly "system.io.compression.filesystem"
-                    [io.compression.zipfile]::ExtractToDirectory("$archiveFile", "$logpath")
-                } else {
-                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version V5 or above, unziping via Expand-Archive"
-                    Expand-Archive $archiveFile -DestinationPath $logpath -Force -ErrorAction Stop
-                }
 
+                    if ($Version -ge $RequiredVersion) {
+                        # Execute the command for .NET Framework 4.5 and above
+                        #Check what PS version we are using.
+                        if ($PSVersionTable.PSVersion.Major -lt 5) {
+                            Write-Verbose "$(Get-FormattedDate) This is PowerShell version less than V5, using .NET framework classes to unpack"
+                            Add-Type -assembly "system.io.compression.filesystem"
+                            [io.compression.zipfile]::ExtractToDirectory("$archiveFile", "$logpath")
+                        } else {
+                            Write-Verbose "$(Get-FormattedDate) This is PowerShell version V5 or above, unziping via Expand-Archive"
+                            Expand-Archive $archiveFile -DestinationPath $logpath -Force -ErrorAction Stop
+                        }
+                    } else {
+                        Write-Verbose "$(Get-FormattedDate) DOTNET version is below 4.5 Using COM Shell Application to Expand"
+                        $shell = New-Object -ComObject Shell.Application
+                        $zip = $shell.NameSpace($zipFilePath)
+                        $destination = $shell.NameSpace($extractPath)
+                        $destination.CopyHere($zip.Items(), 0x10)
+                    }
+                    
                     $agentinstallPath = $logpath.Trim() + (Get-Item -Path $logpath\elastic-agent-*).Name
                     
                     Start-Sleep -Milliseconds 500
