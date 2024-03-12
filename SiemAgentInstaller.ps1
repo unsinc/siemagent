@@ -38,6 +38,9 @@ Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM inst
 .PARAMETER logpath
 Use this switch to direct the log/data output to the specified directory. By default environment temp path will be used.
 
+.PARAMETER filesource
+Use this switch to indicate where deployment files are. If this switch is used, installer will not download files, but instead grab them from the indicated folder.
+
 #>
 [CmdletBinding()]
 param
@@ -52,6 +55,9 @@ param
 
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
 	[string[]]$logpath,
+
+    [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
+	[string[]]$filesource,
 
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
@@ -253,10 +259,28 @@ function Get-UNSFiles($downloadUrl, $installPath) {
             $downloadSuccessful = $true
         }
         catch {
-            $errorMessage = $_.Exception.Message
-            Write-Error "$(Get-FormattedDate) Failed to download files for following reasons: $errorMessage"
-            $downloadSuccessful = $false
-            $retryCount++
+            Write-Error "$(Get-FormattedDate) Asynchronous download failed. Trying synchronous download."
+            try {
+                $webClient.DownloadFile($downloadUrl, $installPath)
+                $downloadSuccessful = $true
+            }
+            catch {
+                Write-Error "$(Get-FormattedDate) Synchronous download failed. Trying Invoke-WebRequest."
+                try {
+                    Invoke-WebRequest -Uri $downloadUrl -OutFile $installPath
+                    while (!(Test-Path $installPath) -or (Get-Item $installPath).length -eq 0) {
+                        Write-Host "Waiting for the file to be downloaded..."
+                        Start-Sleep -Seconds 1
+                    }
+                    $downloadSuccessful = $true
+                }
+                catch {
+                    $errorMessage = $_.Exception.Message
+                    Write-Error "$(Get-FormattedDate) Failed to download files for following reasons: $errorMessage"
+                    $downloadSuccessful = $false
+                    $retryCount++
+                }
+            }
         }
     } while (-not $downloadSuccessful -and $retryCount -lt 3)
 
@@ -265,6 +289,7 @@ function Get-UNSFiles($downloadUrl, $installPath) {
         exit
     }
 }
+
 
 # Download files
 for ($i=0; $i -lt $downloadUrls.Length; $i++) {
