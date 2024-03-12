@@ -6,25 +6,33 @@ UNS SIEM Agent deployment tool
 Deployment scrip will perform following tasks:
 1. Uninstall Sysmon 32 bit from the system.
 2. Install Sysmon 64bit on the system.
-3. Install and enforce proprietary Sysmon64 config file.
-4. Deploy UNS SIEM Agent and require enrollment-token/URL input from the user, if values are not passed with -token or -fleetURL parameters.
-
+3. Uninstall Perch collector is its installed.
+4. Install and enforce proprietary Sysmon64 config file.
+5. Deploy UNS SIEM Agent.
+If you need help with switches, please repeat this command with -Full
 
 .NOTES
 File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
-Prerequisite   : PowerShell V5
+Prerequisite   : PowerShell >= V4,V5
 Copyright	   : 2024, UNS Inc
 Version		   : 2024.03.12.3
 
 .EXAMPLE
-.\SiemAgentInstaller.ps1 -Verbose
+You can smply load the script and let it do it's magic.
+.\SiemAgentInstaller.ps1
 
 .EXAMPLE
+You can provide both enrollment url and token on the console. If none is provided, you will be prompted during the deployment process.
 .\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose
 
 .EXAMPLE
-For additioanal help "Get-Help .\SiemAgentInstaller.ps1 -Online"
+If you want to deploy from local files, make sure script in positioned where files are. Execute with -local . In addition you can specify
+.\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose -local
+
+.EXAMPLE
+If you'd like to choose custom destination file path, please select -datpath. Ex. -datapath C:\temp
+.\SiemAgentInstaller.ps1 -datapath C:\temp
 
 .LINK
 https://github.com/unsinc/siemagent/blob/main/README.md
@@ -38,8 +46,8 @@ Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM inst
 .PARAMETER datapath
 Use this switch to indicate where deployment files are. If this switch is used, installer will not download files, but instead grab them from the indicated folder.
 
-.PARAMETER noDownload
-To be used with $datapth. When passed, script will look for files stored under datapath. If no datapath is specified while passing noDownload, datapath will default to current script location.
+.PARAMETER local
+To be used with $datapth. When passed, script will look for files stored under datapath. If no datapath is specified while passing local, datapath will default to current script location.
 
 
 #>
@@ -58,7 +66,7 @@ param
 	[string[]]$datapath,
 
     [Parameter(Mandatory = $false)]
-    [switch]$noDownload,
+    [switch]$local,
 
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
@@ -75,11 +83,11 @@ if($invalid_parameter)
 #$fleetURL = "" 
 #$token = ""
 #datapath = (Get-Location)
-#noDownload = $true
+#local = $true
 ###########################################################################################
 
-if (($noDownload) -and (-not $datapath)) {
-    Write-Verbose "-noDownload was provided without -datapath. dataPath will default to current script location."
+if (($local) -and (-not $datapath)) {
+    Write-Verbose "-local was provided without -datapath. dataPath will default to current script location."
     $datapath = (Get-Location)
 }
 
@@ -334,9 +342,9 @@ function Get-UNSFiles($downloadUrl, $installPath) {
     }
 }
 
-# verify if $noDownload
-if ($noDownload) {
-    Write-Verbose "$(Get-FormattedDate) `$noDownload switch provided. Looking for files in $($datapath.TrimEnd('UNSFiles\'))"
+# verify if $local
+if ($local) {
+    Write-Verbose "$(Get-FormattedDate) `$local switch provided. Looking for files in $($datapath.TrimEnd('UNSFiles\'))"
     # Get all files in the directory
     $mfiles = Get-ChildItem -Path $($datapath.TrimEnd('UNSFiles\')) -File -ErrorAction SilentlyContinue
     foreach ($tfile in $mfiles) {Move-Item $tfile -Destination $datapath}
