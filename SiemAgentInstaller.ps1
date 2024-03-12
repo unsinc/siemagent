@@ -15,7 +15,7 @@ File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
 Prerequisite   : PowerShell V5
 Copyright	   : 2024, UNS Inc
-Version		   : 2024.01.30
+Version		   : 2024.03.12
 
 .EXAMPLE
 .\SiemAgentInstaller.ps1 -Verbose
@@ -38,6 +38,9 @@ Use this switch to assign a specific UNS Fleet URL to a particular UNS SIEM inst
 .PARAMETER logpath
 Use this switch to direct the log/data output to the specified directory. By default environment temp path will be used.
 
+.PARAMETER filesource
+Use this switch to indicate where deployment files are. If this switch is used, installer will not download files, but instead grab them from the indicated folder.
+
 #>
 [CmdletBinding()]
 param
@@ -52,6 +55,9 @@ param
 
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
 	[string[]]$logpath,
+
+    [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
+	[string[]]$filesource,
 
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
@@ -121,6 +127,7 @@ if ($logpath) {
     } else {
         try {
             New-Item -Path $logpath -ItemType Directory -Force -ErrorAction Stop
+            mkdir -Path $logpath -Force -ErrorAction SilentlyContinue
         }
         catch [System.IO.PathTooLongException] {
             $errorMessage = "File Path too long. Maximum allowed characters 256."
@@ -138,9 +145,30 @@ if ($logpath) {
 } else {
     [String]$logpath = $env:temp.Trim(), "\UNSFiles\" -join ''
     Write-Verbose -Message "$(Get-FormattedDate) Default LogPath is: $logpath"
+    if (Test-Path $logpath) {
+        Write-Verbose "$(Get-FormattedDate) $logpath directory exist."
+    } else {
+        try {
+            New-Item -Path $logpath -ItemType Directory -Force -ErrorAction Stop
+            mkdir -Path $logpath -Force -ErrorAction SilentlyContinue
+        }
+        catch [System.IO.PathTooLongException] {
+            $errorMessage = "File Path too long. Maximum allowed characters 256."
+            Write-Error $errorMessage -ErrorAction Stop
+            Start-Sleep 5
+            exit
+        }
+        catch {
+            $errorMessage = $_.Exception.Message
+            Write-Error "$(Get-FormattedDate) $logpath folder creation failed because of: $errorMessage"
+            Start-Sleep 5
+            exit
+        }
+    }
 }
 
 #start transcript logging.
+
 $transcriptFilePath = Join-Path -Path $logpath -ChildPath "UNSAgent_Installer_Transcript_$(Get-FormattedDate).txt"
 Start-Transcript -Path $transcriptFilePath
 
@@ -155,6 +183,7 @@ if (Test-Path $InstallDIR) {
     "Exist" | Out-Null
 } else {
     try {
+
         New-Item -Path $InstallDIR -ItemType Directory -Force
         Write-Output "Setting up Install DIR to $($InstallDIR)"
         Write-Verbose -Message "$(Get-FormattedDate) Default Installation Directory is: $InstallDIR"
@@ -173,7 +202,12 @@ function Remove-ElasticLeftovers {
     )
 
     if (Test-Path -Path $path) {
-        $items = Get-ChildItem $path -Exclude *.log -Depth 3 -Recurse
+        #Check what PS version we are using.
+        if ($PSVersionTable.PSVersion.Major -lt 5) {
+            $items = Get-ChildItem $path -Exclude *.log -Recurse -Force
+        } else {
+            $items = Get-ChildItem $path -Exclude *.log -Depth 3 -Recurse -Force
+        }
 		foreach ($item in $items) {
 			if (Test-Path $item -PathType Any) {
                 Write-Debug "$(Get-FormattedDate) Removing $item."
@@ -253,10 +287,28 @@ function Get-UNSFiles($downloadUrl, $installPath) {
             $downloadSuccessful = $true
         }
         catch {
-            $errorMessage = $_.Exception.Message
-            Write-Error "$(Get-FormattedDate) Failed to download files for following reasons: $errorMessage"
-            $downloadSuccessful = $false
-            $retryCount++
+            Write-Error "$(Get-FormattedDate) Asynchronous download failed. Trying synchronous download."
+            try {
+                $webClient.DownloadFile($downloadUrl, $installPath)
+                $downloadSuccessful = $true
+            }
+            catch {
+                Write-Error "$(Get-FormattedDate) Synchronous download failed. Trying Invoke-WebRequest."
+                try {
+                    Invoke-WebRequest -Uri $downloadUrl -OutFile $installPath -UseBasicParsing
+                    while (!(Test-Path $installPath) -or (Get-Item $installPath).length -eq 0) {
+                        Write-Host "Waiting for the file to be downloaded..."
+                        Start-Sleep -Seconds 1
+                    }
+                    $downloadSuccessful = $true
+                }
+                catch {
+                    $errorMessage = $_.Exception.Message
+                    Write-Error "$(Get-FormattedDate) Failed to download files for following reasons: $errorMessage"
+                    $downloadSuccessful = $false
+                    $retryCount++
+                }
+            }
         }
     } while (-not $downloadSuccessful -and $retryCount -lt 3)
 
@@ -265,6 +317,7 @@ function Get-UNSFiles($downloadUrl, $installPath) {
         exit
     }
 }
+
 
 # Download files
 for ($i=0; $i -lt $downloadUrls.Length; $i++) {
@@ -294,6 +347,7 @@ catch {
     exit
 }
 
+Write-Verbose "$(Get-FormattedDate) InstallDIR is $InstallDIR"
 # Copy required files to the installation directory
 function CopyFilesToDir {
     $retryCount = 0
@@ -301,7 +355,19 @@ function CopyFilesToDir {
         try {
             if (-not (Test-Path "$InstallDIR\sysmon\Sysmon.exe")) {
                 Write-Output "$(Get-FormattedDate) $($dirPath) created."
-                Expand-Archive -Path $logpath\Sysmon.zip -DestinationPath $InstallDIR\sysmon -ErrorAction Stop -Verbose
+                Write-Verbose "$(Get-FormattedDate) Unzipping $logpath\Sysmon.zip to $InstallDIR\sysmon"
+                
+                #Check what PS version we are using.
+                if ($PSVersionTable.PSVersion.Major -lt 5) {
+                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version less than 5, using .NET framework classes to unpack"
+                    Add-Type -assembly "system.io.compression.filesystem"
+                    [io.compression.zipfile]::ExtractToDirectory("$logpath\Sysmon.zip", "$InstallDIR\sysmon")
+                } else {
+                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version 5 unziping via Expand-Archive"
+                    Expand-Archive -Path $logpath\Sysmon.zip -DestinationPath $InstallDIR\sysmon -ErrorAction Stop -Verbose
+                }
+
+                # Verify if files were extracted.
                 if (Test-Path "$InstallDIR\sysmon\Sysmon.exe") {
                     Write-Verbose "$(Get-FormattedDate) Sysmon copied successfully."
                     Write-Verbose "$(Get-FormattedDate) Sysmon64.exe copied successfully."
@@ -329,7 +395,7 @@ function CopyFilesToDir {
             }
         }
         catch [FileNotFoundException] {
-            Write-Output "$(Get-FormattedDate) File not found. Attempting to download again."
+            Write-Output "$(Get-FormattedDate) File not found. Attempting to copy file  again."
             throw
             $copySuccessful = $false
             $retryCount++
@@ -443,7 +509,7 @@ function Set-Sysmon64 {
     $sysmon64 = Get-Service -Name 'Sysmon64' -ErrorAction SilentlyContinue
     if ($sysmon64) {
         try {
-            Write-Output  "$(Get-FormattedDate) Sysmon64 is running. Setting the configuration for Sysmon64." 
+            Write-Output  "$(Get-FormattedDate) Setting the configuration for Sysmon64." 
             $process = Start-Process -FilePath "$InstallDIR\sysmon\sysmon64.exe" -ArgumentList "-c `"$InstallDIR\configs\UNS-Sysmon.xml`"" -NoNewWindow -PassThru
             $handle = $process.Handle  # Cache the process handle
             $process.WaitForExit()
@@ -577,7 +643,17 @@ function Install-ElasticAgent {
                     Write-Verbose "$(Get-FormattedDate) LogPath is $logpath"
                     $archiveFile = $logpath.Trim() + $agentFiles[2].Trim()
                     Write-Verbose "$(Get-FormattedDate) Archive file is $archiveFile"
+
+                #Check what PS version we are using.
+                if ($PSVersionTable.PSVersion.Major -lt 5) {
+                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version less than V5, using .NET framework classes to unpack"
+                    Add-Type -assembly "system.io.compression.filesystem"
+                    [io.compression.zipfile]::ExtractToDirectory("$archiveFile", "$logpath")
+                } else {
+                    Write-Verbose "$(Get-FormattedDate) This is PowerShell version V5 or above, unziping via Expand-Archive"
                     Expand-Archive $archiveFile -DestinationPath $logpath -Force -ErrorAction Stop
+                }
+
                     $agentinstallPath = $logpath.Trim() + (Get-Item -Path $logpath\elastic-agent-*).Name
                     
                     Start-Sleep -Milliseconds 500
