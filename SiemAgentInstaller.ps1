@@ -74,8 +74,8 @@ if($invalid_parameter)
 ######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
 #$fleetURL = "" 
 #$token = ""
-#$datapath = (Get-Location)
-#$noDownload = $true
+#datapath = (Get-Location)
+#noDownload = $true
 ###########################################################################################
 
 # Check dotnet version installed.
