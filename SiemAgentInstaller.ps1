@@ -82,8 +82,8 @@ if($invalid_parameter)
 ######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
 #$fleetURL = "" 
 #$token = ""
-#datapath = (Get-Location)
-#local = $true
+#$datapath = (Get-Location)
+#$local = $true
 ###########################################################################################
 
 if (($local) -and (-not $datapath)) {
