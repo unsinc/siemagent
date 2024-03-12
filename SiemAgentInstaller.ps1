@@ -15,7 +15,7 @@ File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
 Prerequisite   : PowerShell V5
 Copyright	   : 2024, UNS Inc
-Version		   : 2024.03.12.2
+Version		   : 2024.03.12.3
 
 .EXAMPLE
 .\SiemAgentInstaller.ps1 -Verbose
