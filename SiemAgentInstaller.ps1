@@ -269,7 +269,6 @@ function Get-UNSFiles($downloadUrl, $installPath) {
 # Download files
 for ($i=0; $i -lt $downloadUrls.Length; $i++) {
     Write-Verbose "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
-    #Write-Output "$(Get-FormattedDate) Downloading $($agentPaths[$i])"
     Get-UNSFiles -downloadUrl $downloadUrls[$i] -installPath $agentPaths[$i]
 }
 
@@ -387,10 +386,10 @@ function Uninstall-Sysmon32 {
 # Uninstall Perch
 function Uninstall-Perch {
     param()
-    $arguments = "/X{18B16389-F8F8-4E48-9E78-A043D5742B99}"
+    $arguments = "/X {18B16389-F8F8-4E48-9E78-A043D5742B99} /qn"
         try {
-            Write-Verbose "$timestamp Uninstalling Perch agent"
-            Write-Output "$timestamp Uninstalling Perch agent"
+            Write-Verbose "$(Get-FormattedDate) Uninstalling Perch agent"
+            Write-Output "$(Get-FormattedDate) Uninstalling Perch agent"
             $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "$arguments" -NoNewWindow -PassThru
             $handle = $process.Handle  # Cache the process handle
             $process.WaitForExit()
@@ -648,7 +647,7 @@ function Install-ElasticAgent {
                 if ($null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)) {
                     Write-Output "$(Get-FormattedDate) Removing old agent service, please wait"
                     try {
-                        Stop-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue
+                        Stop-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue -Force -Confirm:$false
                         sc.exe delete "Elastic Agent"
                     }
                     catch {
@@ -677,7 +676,7 @@ function Install-ElasticAgent {
                 $null = $handle
 
                 #Sleep 3 seconds before attempting to stop services.
-                Start-Sleep 3
+                Start-Sleep -Seconds 3
 
                 #modifying services
                 if (Get-Service -ServiceName "Elastic Agent") {
@@ -697,6 +696,7 @@ function Install-ElasticAgent {
                             Write-Error $errorMessage -ErrorAction Stop
                             exit
                         }
+
                         Write-Verbose "$(Get-FormattedDate) Elastic agent service stopped."
                         
                         Start-Sleep -Milliseconds 500
@@ -704,13 +704,13 @@ function Install-ElasticAgent {
                         Write-Verbose "$(Get-FormattedDate) Renaming elastic agent service name"
                         try {
 
-                            Set-Service -ServiceName "Elastic Agent" -DisplayName "UNS SIEM Agent" -ErrorAction Stop -Force -Confirm:$false
-                            Set-Service -ServiceName "Elastic Agent" -Description "UNS SIEM Agent is a unified agent to observe, monitor and protect your system." -Force -Confirm:$false
-
+                            Set-Service -ServiceName "Elastic Agent" -DisplayName "UNS SIEM Agent" -ErrorAction Stop
+                            Set-Service -ServiceName "Elastic Agent" -Description "UNS SIEM Agent is a unified agent to observe, monitor and protect your system."
+ 
                         }
                         catch {
                             $errorMessage = $_.Exception.Message
-                            Write-Error $errorMessage -ErrorAction Stop
+                            Write-Error "$(Get-FormattedDate) Installation failed because of $($errorMessage)" -ErrorAction Stop
                             exit
                         }
 
@@ -721,7 +721,7 @@ function Install-ElasticAgent {
                         #Atetmpting to start uns siem agent
                         Write-Verbose "$(Get-FormattedDate) Attempting to start UNS SIEM Agent Service"
                         try {
-                            Start-Service -ServiceName "Elastic Agent" -Force -Confirm:$false
+                            Start-Service -ServiceName "Elastic Agent"
                         }
                         catch {
                             $errorMessage = $_.Exception.Message
