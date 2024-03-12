@@ -72,7 +72,7 @@ if($invalid_parameter)
 }
 
 ######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
-#$fleetURL = ""
+#$fleetURL = "" 
 #$token = ""
 #$datapath = (Get-Location)
 #$noDownload = $true
