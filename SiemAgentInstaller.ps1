@@ -49,6 +49,8 @@ Use this switch to indicate where deployment files are. If this switch is used, 
 .PARAMETER local
 To be used with $datapth. When passed, script will look for files stored under datapath. If no datapath is specified while passing local, datapath will default to current script location.
 
+.PARAMETER insecure
+To be used with self signed fleet certificates 
 
 #>
 [CmdletBinding()]
@@ -67,6 +69,9 @@ param
 
     [Parameter(Mandatory = $false)]
     [switch]$local,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$insecure,
 
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
@@ -755,6 +760,9 @@ function Install-ElasticAgent {
          	$arguments = "install -f"
             $arguments += " --url=$fleetURL"
             $arguments += " --enrollment-token=$token"
+            if ($insecure) {
+            $arguments += " --insecure"
+            }
                 
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
