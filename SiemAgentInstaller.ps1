@@ -16,7 +16,7 @@ File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
 Prerequisite   : PowerShell >= V4,V5
 Copyright	   : 2024, UNS Inc
-Version		   : 2024.03.12.3
+Version		   : 2024.03.12.4
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
@@ -922,39 +922,6 @@ try {
     } else {
         Write-Output "$(Get-FormattedDate) Something went wrong"
     }
-
-   <# if (Get-Service -Name "UNSAgent") {
-
-        Write-Verbose "Setting update task..."
-        # Define the task properties
-        $taskName = "UNS Update Task"
-        # Task description
-        $taskDescription = "This task checks a private GitHub repository for updates"
-        # Task action
-
-        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -Command {IEX(New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/unsinc/siemagent/main/files/task.ps1')}"
-
-
-        # Define the trigger to run the task every 5 minutes
-        $taskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
-
-        # Define the principal to run the task with system privileges
-        $taskPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    
-        try {
-           # Register the task
-            Register-ScheduledTask -Action $taskAction -Trigger $taskTrigger -TaskName $taskName -Description $taskDescription -Principal $taskPrincipal 
-            if (Get-ScheduledTask -TaskName $taskName) {
-                Write-Verbose "UNS Update Task creation successful"
-            }
-        }
-        catch {
-            $errorMessage = $_.Exception.Message
-            Write-Error "$(Get-FormattedDate) UNS Agent Update Task creation failed because of $($errorMessage)"
-            break
-        }
-    } #>
-
 }
 catch {
     $errorMessage = $_.Exception.Message
