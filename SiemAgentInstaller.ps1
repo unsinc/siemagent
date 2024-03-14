@@ -31,7 +31,7 @@ If you want to deploy from local files, make sure script in positioned where fil
 .\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose -local
 
 .EXAMPLE
-If you'd like to choose custom destination file path, select -datapath. Ex. -datapath C:\temp
+If you'd like to choose custom destination file path, please select -datapath. Ex. -datapath C:\temp
 .\SiemAgentInstaller.ps1 -datapath C:\temp
 
 .LINK
@@ -49,6 +49,8 @@ Use this switch to indicate where deployment files are. If this switch is used, 
 .PARAMETER local
 To be used with $datapth. When passed, script will look for files stored under datapath. If no datapath is specified while passing local, datapath will default to current script location.
 
+.PARAMETER insecure
+To be used with self signed fleet certificates 
 
 #>
 [CmdletBinding()]
@@ -67,6 +69,9 @@ param
 
     [Parameter(Mandatory = $false)]
     [switch]$local,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$insecure,
 
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
@@ -95,6 +100,7 @@ if (($local) -and (-not $datapath)) {
 $DotNetVersionKey = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP' -Recurse | Get-ItemProperty -EA 0 -name Version | Where-Object { $_.PSChildName -match '^(?!Setup)[\d\.]+' } | Select-Object -Property PSChildName, Version | Sort-Object Version -Descending | Select-Object -First 1
 $Version = New-Object Version($DotNetVersionKey.Version)
 $RequiredVersion = New-Object Version("4.5")
+
 
 # Time function
 function Get-FormattedDate {
@@ -754,6 +760,9 @@ function Install-ElasticAgent {
          	$arguments = "install -f"
             $arguments += " --url=$fleetURL"
             $arguments += " --enrollment-token=$token"
+            if ($insecure) {
+            $arguments += " --insecure"
+            }
                 
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
