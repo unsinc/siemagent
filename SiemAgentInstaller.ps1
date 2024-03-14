@@ -31,7 +31,7 @@ If you want to deploy from local files, make sure script in positioned where fil
 .\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose -local
 
 .EXAMPLE
-If you'd like to choose custom destination file path, please select -datpath. Ex. -datapath C:\temp
+If you'd like to choose custom destination file path, select -datapath. Ex. -datapath C:\temp
 .\SiemAgentInstaller.ps1 -datapath C:\temp
 
 .LINK
@@ -95,7 +95,6 @@ if (($local) -and (-not $datapath)) {
 $DotNetVersionKey = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP' -Recurse | Get-ItemProperty -EA 0 -name Version | Where-Object { $_.PSChildName -match '^(?!Setup)[\d\.]+' } | Select-Object -Property PSChildName, Version | Sort-Object Version -Descending | Select-Object -First 1
 $Version = New-Object Version($DotNetVersionKey.Version)
 $RequiredVersion = New-Object Version("4.5")
-
 
 # Time function
 function Get-FormattedDate {
