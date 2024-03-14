@@ -31,7 +31,7 @@ If you want to deploy from local files, make sure script in positioned where fil
 .\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose -local
 
 .EXAMPLE
-If you'd like to choose custom destination file path, please select -datpath. Ex. -datapath C:\temp
+If you'd like to choose custom destination file path, please select -datapath. Ex. -datapath C:\temp
 .\SiemAgentInstaller.ps1 -datapath C:\temp
 
 .LINK
