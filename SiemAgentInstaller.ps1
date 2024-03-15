@@ -73,13 +73,13 @@ param
     [Parameter(Mandatory = $false)]
     [switch]$insecure,
 
-    [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
+    [parameter(ValueFromRemainingArguments=$true)]$invalid
 )
 
 #check if invalid parameter was passed on the console
-if($invalid_parameter)
+if($invalid)
 {
-    Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\SiemAgentInstaller.ps1"
+    Write-Output "[-] $($invalid) is not a valid switch. Please type Get-Help .\SiemAgentInstaller.ps1"
     throw
 
 }
