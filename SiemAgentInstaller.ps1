@@ -936,7 +936,7 @@ finally {
     Write-Verbose "$(Get-FormattedDate) All temp files were removed."
     Write-Output "$(Get-FormattedDate) All temp files were removed."
     Write-Output "$(Get-FormattedDate) Good bye"
-    $datapath=$null;$unsfiles=$null;$InstallDIR=$null;$agentFiles=$null;
+    $datapath=$null;$unsfiles=$null;$InstallDIR=$null;$agentFiles=$null;$fleetURL=$null;$token=$null;
     Start-Sleep 5
     exit
 }
