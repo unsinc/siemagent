@@ -16,7 +16,7 @@ File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
 Prerequisite   : PowerShell >= V4,V5
 Copyright	   : 2024, UNS Inc
-Version		   : 2024.03.12.4
+Version		   : 2024.03.27.1
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
@@ -73,13 +73,13 @@ param
     [Parameter(Mandatory = $false)]
     [switch]$insecure,
 
-    [parameter(ValueFromRemainingArguments=$true)]$invalid
+    [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
 
 #check if invalid parameter was passed on the console
-if($invalid)
+if($invalid_parameter)
 {
-    Write-Output "[-] $($invalid) is not a valid switch. Please type Get-Help .\SiemAgentInstaller.ps1"
+    Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\SiemAgentInstaller.ps1"
     throw
 
 }
@@ -936,6 +936,7 @@ finally {
     Write-Verbose "$(Get-FormattedDate) All temp files were removed."
     Write-Output "$(Get-FormattedDate) All temp files were removed."
     Write-Output "$(Get-FormattedDate) Good bye"
+    $datapath=$null;$unsfiles=$null;$InstallDIR=$null;$agentFiles=$null;$fleetURL=$null;$token=$null;
     Start-Sleep 5
     exit
 }
