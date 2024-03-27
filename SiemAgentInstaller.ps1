@@ -16,7 +16,7 @@ File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
 Prerequisite   : PowerShell >= V4,V5
 Copyright	   : 2024, UNS Inc
-Version		   : 2024.03.12.5
+Version		   : 2024.03.27.1
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
