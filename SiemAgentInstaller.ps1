@@ -16,7 +16,7 @@ File Name      : SiemAgentInstaller.ps1
 Author         : nkolev@unsinc.com
 Prerequisite   : PowerShell >= V4,V5
 Copyright	   : 2024, UNS Inc
-Version		   : 2024.03.12.4
+Version		   : 2024.03.12.5
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
@@ -936,6 +936,7 @@ finally {
     Write-Verbose "$(Get-FormattedDate) All temp files were removed."
     Write-Output "$(Get-FormattedDate) All temp files were removed."
     Write-Output "$(Get-FormattedDate) Good bye"
+    $datapath=$null;$unsfiles=$null;$InstallDIR=$null;$agentFiles=$null;
     Start-Sleep 5
     exit
 }
