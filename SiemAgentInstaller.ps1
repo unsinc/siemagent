@@ -27,7 +27,7 @@ You can provide both enrollment url and token on the console. If none is provide
 .\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose
 
 .EXAMPLE
-If you want to deploy from local files, make sure script in positioned where files are. Execute with -local . In addition you can specify
+If you want to deploy from local files, make sure script in positioned where files are. Execute with -local. In addition you can specify
 .\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose -local
 
 .EXAMPLE
@@ -936,7 +936,8 @@ finally {
     Write-Verbose "$(Get-FormattedDate) All temp files were removed."
     Write-Output "$(Get-FormattedDate) All temp files were removed."
     Write-Output "$(Get-FormattedDate) Good bye"
-    $datapath=$null;$unsfiles=$null;$InstallDIR=$null;$agentFiles=$null;$fleetURL=$null;$token=$null;
+    $datapath=$null;$unsfiles=$null;$InstallDIR=$null;
+    $agentFiles=$null;$fleetURL=$null;$token=$null;
     Start-Sleep 5
     exit
 }
