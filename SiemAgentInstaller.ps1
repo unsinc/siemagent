@@ -256,7 +256,7 @@ Write-Verbose -Message "$(Get-FormattedDate) Current location is: $currentLocati
 $originalLinks = @(
     "https://download.sysinternals.com/files/Sysmon.zip"  ## UNS Sysmon File
 	"https://raw.githubusercontent.com/unsinc/siemagent/main/files/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
-	"https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.11.4-windows-x86_64.zip"   ## Elastic elastic-agent
+	"https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.15.1-windows-x86_64.zip"   ## Elastic elastic-agent
     "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.ico"   ## UNS Logo ico
     "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.png"   ## UNS Logo
 )
