@@ -91,6 +91,11 @@ if($invalid_parameter)
 #$local = $true
 ###########################################################################################
 
+# check if server is 2012 and apply different policy with no defend, until they update them. 
+function check_2012 {
+    (Get-WmiObject -Class Win32_OperatingSystem).Caption -match "2012"
+}
+
 # agenda
 # 0 - Standalone Workstation
 # 1 - Member Workstation
@@ -101,22 +106,35 @@ if($invalid_parameter)
 
 # If you need to use the script to deploy on all variery of endpoints from a single task
 function check_windows_role {
+    
     $role = (Get-WmiObject Win32_ComputerSystem).DomainRole
     if (($role -eq 4) -or ($role -eq 5)) {
-	return ""
-    }
-    elseif (($role -eq 2) -or ($role -eq 3)) {
-        # if hyper-v role server
-	$hypervrole = (Get-WindowsFeature -Name Hyper-V).InstallState -eq "Installed"
-        if ($hypervrole) {
-            return ""
+        if (check_2012) {
+            return "=="
         } else {
-            return ""
+            return "=="
         }
     }
-    else {
+    elseif (($role -eq 2) -or ($role -eq 3)) {
+        $hypervrole = (Get-WindowsFeature -Name Hyper-V).InstallState -eq "Installed"
+        if ($hypervrole) {
+            # if you have hyper-v policy
+            if (check_2012) {
+                return "=="
+            } else {
+                return "=="
+            }
+        } else {
+            if (check_2012) {
+                return "=="
+            } else {
+                return "==" 
+            }
+        } 
+    } else {
+        # add workstations here if needed
         #return ""
-	return 1
+        return 1
     }
 }
 # uncomment here:
@@ -285,11 +303,11 @@ Write-Verbose -Message "$(Get-FormattedDate) Current location is: $currentLocati
 # In case we want to download the files from google drive, below lines should be uncomment.
 # Add your links here in same order.
 $originalLinks = @(
-    "https://download.sysinternals.com/files/Sysmon.zip"  ## UNS Sysmon File
-    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
-    "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.16.1-windows-x86_64.zip"   ## Elastic elastic-agent
-    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.ico"   ## UNS Logo ico
-    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.png"   ## UNS Logo
+    "https://download.sysinternals.com/files/Sysmon.zip"                                                    ## UNS Sysmon File
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/UNS-Sysmon.xml"                          ## UNS Sysmon Configuration File
+    "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.15.5-windows-x86_64.zip"    ## Elastic elastic-agent
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.ico"                                ## UNS Logo ico
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.png"                                ## UNS Logo
 )
 
 # Function to modify google drive share links into downloadable format.
