@@ -12,11 +12,11 @@ Deployment scrip will perform following tasks:
 If you need help with switches, please repeat this command with -Full
 
 .NOTES
-File Name      : SiemAgentInstaller.ps1
-Author         : nkolev@unsinc.com
-Prerequisite   : PowerShell >= V4,V5
-Copyright	   : 2024, UNS Inc
-Version		   : 2024.03.27.1
+File Name       : SiemAgentInstaller.ps1
+Author          : nkolev@unsinc.com
+Prerequisite    : PowerShell >= V4,V5
+Copyright       : 2024, UNS Inc
+Version         : 2024.12.11.0
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
@@ -282,11 +282,11 @@ Write-Verbose -Message "$(Get-FormattedDate) Current location is: $currentLocati
 # In case we want to download the files from google drive, below lines should be uncomment.
 # Add your links here in same order.
 $originalLinks = @(
-	"https://download.sysinternals.com/files/Sysmon.zip"  ## UNS Sysmon File
-	"https://raw.githubusercontent.com/unsinc/siemagent/main/files/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
-	"https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.16.1-windows-x86_64.zip"   ## Elastic elastic-agent
-	"https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.ico"   ## UNS Logo ico
-	"https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.png"   ## UNS Logo
+    "https://download.sysinternals.com/files/Sysmon.zip"  ## UNS Sysmon File
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/UNS-Sysmon.xml"   ## UNS Sysmon Configuration File
+    "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.16.1-windows-x86_64.zip"   ## Elastic elastic-agent
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.ico"   ## UNS Logo ico
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.png"   ## UNS Logo
 )
 
 # Function to modify google drive share links into downloadable format.
