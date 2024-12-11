@@ -103,23 +103,24 @@ if($invalid_parameter)
 function check_windows_role {
     $role = (Get-WmiObject Win32_ComputerSystem).DomainRole
     if (($role -eq 4) -or ($role -eq 5)) {
-	$token = ""
+	return ""
     }
     elseif (($role -eq 2) -or ($role -eq 3)) {
         # if hyper-v role server
 	$hypervrole = (Get-WindowsFeature -Name Hyper-V).InstallState -eq "Installed"
         if ($hypervrole) {
-            $token = ""
+            return ""
         } else {
-            $token = ""
+            return ""
         }
     }
     else {
-        $token = ""
+        #return ""
+	return 1
     }
 }
 # uncomment here:
-# check_windows_role
+$token = check_windows_role
 
 if (($local) -and (-not $datapath)) {
     Write-Verbose "-local was provided without -datapath. dataPath will default to current script location."
