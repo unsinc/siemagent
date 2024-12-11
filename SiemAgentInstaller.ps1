@@ -84,7 +84,7 @@ if($invalid_parameter)
 
 }
 
-# agentda
+# agenda
 # 0 - Standalone Workstation
 # 1 - Member Workstation
 # 2 - Standalone Server
@@ -92,7 +92,7 @@ if($invalid_parameter)
 # 4 - Backup Domain Controller (BDC)
 # 5 - Primary Domain Controller (PDC)
 
-# If you need to use 1 script to deploy on all variery of endpoints.
+# If you need to use the script to deploy on all variery of endpoints from a single task
 function check_windows_role {
     $role = (Get-WmiObject Win32_ComputerSystem).DomainRole
     if (($role -eq 4) -or ($role -eq 5)) {
