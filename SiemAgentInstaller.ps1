@@ -84,8 +84,36 @@ if($invalid_parameter)
 
 }
 
+# agentda
+# 0 - Standalone Workstation
+# 1 - Member Workstation
+# 2 - Standalone Server
+# 3 - Member Server
+# 4 - Backup Domain Controller (BDC)
+# 5 - Primary Domain Controller (PDC)
+
+# If you need to use 1 script to deploy on all variery of endpoints.
+function check_windows_role {
+    $role = (Get-WmiObject Win32_ComputerSystem).DomainRole
+    if (($role -eq 4) -or ($role -eq 5)) {
+        $fleetURL = ""
+        $token = ""
+    }
+    elseif (($role -eq 2) -or ($role -eq 3)) {
+        $fleetURL = ""
+        $token = ""
+    }
+    else {
+        $fleetURL = ""
+        $token = ""
+    }
+}
+# uncomment here:
+# check_windows_role
+
+
 ######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
-#$fleetURL = "" 
+#$fleetURL = ""
 #$token = ""
 #$datapath = (Get-Location)
 #$local = $true
