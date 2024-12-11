@@ -120,7 +120,7 @@ function check_windows_role {
     }
 }
 # uncomment here:
-$token = check_windows_role
+#$token = check_windows_role
 
 if (($local) -and (-not $datapath)) {
     Write-Verbose "-local was provided without -datapath. dataPath will default to current script location."
