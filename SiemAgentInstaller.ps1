@@ -84,6 +84,13 @@ if($invalid_parameter)
 
 }
 
+######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
+#$fleetURL = ""
+#$token = ""
+#$datapath = (Get-Location)
+#$local = $true
+###########################################################################################
+
 # agenda
 # 0 - Standalone Workstation
 # 1 - Member Workstation
@@ -96,28 +103,23 @@ if($invalid_parameter)
 function check_windows_role {
     $role = (Get-WmiObject Win32_ComputerSystem).DomainRole
     if (($role -eq 4) -or ($role -eq 5)) {
-        $fleetURL = ""
-        $token = ""
+	$token = ""
     }
     elseif (($role -eq 2) -or ($role -eq 3)) {
-        $fleetURL = ""
-        $token = ""
+        # if hyper-v role server
+	$hypervrole = (Get-WindowsFeature -Name Hyper-V).InstallState -eq "Installed"
+        if ($hypervrole) {
+            $token = ""
+        } else {
+            $token = ""
+        }
     }
     else {
-        $fleetURL = ""
         $token = ""
     }
 }
 # uncomment here:
 # check_windows_role
-
-
-######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
-#$fleetURL = ""
-#$token = ""
-#$datapath = (Get-Location)
-#$local = $true
-###########################################################################################
 
 if (($local) -and (-not $datapath)) {
     Write-Verbose "-local was provided without -datapath. dataPath will default to current script location."
