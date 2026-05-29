@@ -117,7 +117,7 @@ if [[ "$OS" == "debian" ]]; then
     dpkg -i "/tmp/${FILE}"
     systemctl enable elastic-agent
     systemctl start elastic-agent
-    elastic-agent enroll --url="$FLEET_URL" --enrollment-token="$ENROLLMENT_TOKEN"
+    elastic-agent install --url="$FLEET_URL" --enrollment-token="$ENROLLMENT_TOKEN"
     # cleanup
     echo "[INFO] Deleting Elastic Agent temporary files."
     rm -f "/tmp/${FILE}"
@@ -126,7 +126,7 @@ elif [[ "$OS" == "rhel" ]]; then
     rpm -vi "/tmp/${FILE}"
     systemctl enable elastic-agent
     systemctl start elastic-agent
-    elastic-agent enroll --url="$FLEET_URL" --enrollment-token="$ENROLLMENT_TOKEN"
+    elastic-agent install --url="$FLEET_URL" --enrollment-token="$ENROLLMENT_TOKEN"
     # cleanup
     echo "[INFO] Deleting Elastic Agent temporary files."
     rm -f "/tmp/${FILE}"
