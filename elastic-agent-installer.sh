@@ -3,7 +3,9 @@
 set -euo pipefail
 
 # --- Defaults ---
-VERSION="8.18.4"
+# --- Fetch latest version ---
+REMOTE_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/unsinc/siemagent/refs/heads/main/agent-version" 2>/dev/null | tr -d '[:space:]')
+VERSION="${REMOTE_VERSION:-8.19.16}"
 FLEET_URL=""
 ENROLLMENT_TOKEN=""
 FORCE=false
