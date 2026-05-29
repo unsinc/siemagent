@@ -171,6 +171,21 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 ## setttings ##
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# Fetch agent version from remote, fall back to hardcoded default
+$agentVersion = "8.19.16"
+try {
+    $remoteVersion = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/unsinc/siemagent/refs/heads/main/agent-version" -UseBasicParsing -ErrorAction Stop).Content.Trim()
+    if ($remoteVersion -match '^\d+\.\d+\.\d+$') {
+        $agentVersion = $remoteVersion
+    } else {
+        Write-Verbose "$(Get-FormattedDate) Remote version format unexpected, using default: $agentVersion"
+    }
+} catch {
+    Write-Verbose "$(Get-FormattedDate) Could not fetch remote version, using default: $agentVersion"
+}
+Write-Output "$(Get-FormattedDate) Using Elastic Agent version: $agentVersion"
+
 # check if fleetURL was passed on the console
 if ($fleetURL) {
 Write-Verbose "$(Get-FormattedDate) URL is: $fleetURL"
@@ -303,11 +318,11 @@ Write-Verbose -Message "$(Get-FormattedDate) Current location is: $currentLocati
 # In case we want to download the files from google drive, below lines should be uncomment.
 # Add your links here in same order.
 $originalLinks = @(
-    "https://download.sysinternals.com/files/Sysmon.zip"                                                    ## UNS Sysmon File
-    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/UNS-Sysmon.xml"                          ## UNS Sysmon Configuration File
-    "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-8.15.5-windows-x86_64.zip"    ## Elastic elastic-agent
-    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.ico"                                ## UNS Logo ico
-    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.png"                                ## UNS Logo
+    "https://download.sysinternals.com/files/Sysmon.zip"                                                    		## UNS Sysmon File
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/UNS-Sysmon.xml"                          		## UNS Sysmon Configuration File
+    "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$agentVersion-windows-x86_64.zip"    	## Elastic elastic-agent
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.ico"                                		## UNS Logo ico
+    "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.png"                                		## UNS Logo
 )
 
 # Function to modify google drive share links into downloadable format.
