@@ -12,7 +12,7 @@ Deployment scrip will perform following tasks:
 If you need help with switches, please repeat this command with -Full
 
 .NOTES
-File Name       : SiemAgentInstaller.ps1
+File Name       : elastic-agent-installer.ps1
 Author          : nkolev@unsinc.com
 Prerequisite    : PowerShell >= V4,V5
 Copyright       : 2024, UNS Inc
@@ -20,19 +20,19 @@ Version         : 2024.12.11.0
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
-.\SiemAgentInstaller.ps1
+.\elastic-agent-installer.ps1
 
 .EXAMPLE
 You can provide both enrollment url and token on the console. If none is provided, you will be prompted during the deployment process.
-.\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose
+.\elastic-agent-installer.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose
 
 .EXAMPLE
 If you want to deploy from local files, make sure script in positioned where files are. Execute with -local. In addition you can specify
-.\SiemAgentInstaller.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose -local
+.\elastic-agent-installer.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose -local
 
 .EXAMPLE
 If you'd like to choose custom destination file path, please select -datapath. Ex. -datapath C:\temp
-.\SiemAgentInstaller.ps1 -datapath C:\temp
+.\elastic-agent-installer.ps1 -datapath C:\temp
 
 .LINK
 https://github.com/unsinc/siemagent/blob/main/README.md
@@ -79,7 +79,7 @@ param
 #check if invalid parameter was passed on the console
 if($invalid_parameter)
 {
-    Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\SiemAgentInstaller.ps1"
+    Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\elastic-agent-installer.ps1"
     throw
 
 }
@@ -185,6 +185,21 @@ try {
     Write-Verbose "$(Get-FormattedDate) Could not fetch remote version, using default: $agentVersion"
 }
 Write-Output "$(Get-FormattedDate) Using Elastic Agent version: $agentVersion"
+
+# Detect processor architecture so the correct Elastic Agent package is downloaded
+function Get-AgentArch {
+    $arch = $env:PROCESSOR_ARCHITECTURE
+    if ($env:PROCESSOR_ARCHITEW6432) {
+        $arch = $env:PROCESSOR_ARCHITEW6432
+    }
+    if ($arch -eq "ARM64") {
+        return "windows-arm64.zip"
+    } else {
+        return "windows-x86_64.zip"
+    }
+}
+$agentPkg = Get-AgentArch
+Write-Output "$(Get-FormattedDate) Detected architecture, using package: $agentPkg"
 
 # check if fleetURL was passed on the console
 if ($fleetURL) {
@@ -320,7 +335,7 @@ Write-Verbose -Message "$(Get-FormattedDate) Current location is: $currentLocati
 $originalLinks = @(
     "https://download.sysinternals.com/files/Sysmon.zip"                                                    		## UNS Sysmon File
     "https://raw.githubusercontent.com/unsinc/siemagent/main/files/UNS-Sysmon.xml"                          		## UNS Sysmon Configuration File
-    "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$agentVersion-windows-x86_64.zip"    	## Elastic elastic-agent
+    "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-$agentVersion-$agentPkg"    	## Elastic elastic-agent
     "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.ico"                                		## UNS Logo ico
     "https://raw.githubusercontent.com/unsinc/siemagent/main/files/logo.png"                                		## UNS Logo
 )
