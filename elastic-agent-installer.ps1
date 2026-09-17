@@ -595,6 +595,35 @@ function Uninstall-Sysmon32 {
     $null = $handle
 }
 
+# Function to remove a wrong-architecture Sysmon64 (x64) driver left over on an ARM64 host,
+# e.g. from before native ARM64 support was added, so it can be replaced with Sysmon64a.exe.
+# Kernel-mode drivers cannot run under WOW64/x64 emulation, so an x64 Sysmon64 install on
+# ARM64 is never actually functional and must be uninstalled with the x64 binary before the
+# native one is installed. Errors here are logged but not fatal so Install-Sysmon64 still runs.
+function Uninstall-Sysmon64WrongArch {
+    param ()
+    Write-Output "$(Get-FormattedDate) Wrong-architecture Sysmon64 (x64) driver found on ARM64 host, uninstalling before deploying native $sysmonExe"
+    Write-Verbose "$(Get-FormattedDate) Wrong-architecture Sysmon64 (x64) driver found on ARM64 host, uninstalling before deploying native $sysmonExe"
+    try {
+        $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon64.exe" -ArgumentList "-u force" -NoNewWindow -PassThru
+        $handle = $process.Handle  # Cache the process handle
+        $process.WaitForExit()
+            # Check the exit code
+            if ($process.ExitCode -ne 0) {
+                throw "Uninstall failed with exit code $($process.ExitCode)"
+            } else {
+                Write-Output  "$(Get-FormattedDate) Uninstalling wrong-architecture Sysmon64 completed"
+                Write-Verbose "$(Get-FormattedDate) Uninstalling wrong-architecture Sysmon64 completed."
+            }
+    }
+    catch {
+        $errorMessage = $_.Exception.Message
+        Write-Error "$(Get-FormattedDate) Error while uninstalling wrong-architecture Sysmon64: $errorMessage"
+    }
+    #destroy the handle cache
+    $null = $handle
+}
+
 # Uninstall Perch
 function Uninstall-Perch {
     param()
@@ -997,13 +1026,36 @@ try {
         {Write-Verbose "$(Get-FormattedDate) Perch is not installed on the system"
     }
     if ($null -eq (Get-Service -Name "Sysmon" -ErrorAction SilentlyContinue)) {
-        if ((Get-Service -Name "Sysmon64*" -ErrorAction SilentlyContinue)) {
+        $sysmonServices = @(Get-Service -Name "Sysmon64*" -ErrorAction SilentlyContinue)
+
+        # On ARM64, check the *installed binary path* (not just the service name) for any
+        # matching service - a leftover x64 Sysmon64.exe driver never actually loads on ARM64
+        # (kernel drivers can't run under emulation), so it needs replacing with Sysmon64a.exe.
+        $wrongArchSysmon64 = $false
+        if ($IsArm64Host -and $sysmonServices.Count -gt 0) {
+            foreach ($svc in $sysmonServices) {
+                $svcInfo = Get-WmiObject -Class Win32_Service -Filter "Name='$($svc.Name)'" -ErrorAction SilentlyContinue
+                if ($svcInfo -and ($svcInfo.PathName -match '(?i)Sysmon64\.exe')) {
+                    $wrongArchSysmon64 = $true
+                }
+            }
+        }
+
+        if ($wrongArchSysmon64) {
+            Write-Verbose "$(Get-FormattedDate) Wrong-architecture Sysmon64 (x64) detected on ARM64 host. Replacing with native $sysmonExe..."
+            Uninstall-Sysmon64WrongArch
+            Start-Sleep -Seconds 1
+            Install-Sysmon64
+            Start-Sleep -Seconds 1
+            Set-Sysmon64
+            Start-Sleep -Seconds 1
+        } elseif ($sysmonServices.Count -gt 0) {
             Write-Verbose "$(Get-FormattedDate) Sysmon64 already installed."
         } else {
             Write-Verbose "$(Get-FormattedDate) Sysmon64 not installed on the system. Installing..."
             Install-Sysmon64
             Set-Sysmon64
-        }    
+        }
     } else {
         Write-Verbose "$(Get-FormattedDate) Uninstalling Sysmon32"
         Uninstall-Sysmon32
