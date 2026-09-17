@@ -173,7 +173,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # Fetch agent version from remote, fall back to hardcoded default
-$agentVersion = "8.19.16"
+$agentVersion = "9.5.4"
 try {
     $remoteVersion = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/unsinc/siemagent/refs/heads/main/agent-version" -UseBasicParsing -ErrorAction Stop).Content.Trim()
     if ($remoteVersion -match '^\d+\.\d+\.\d+$') {
@@ -192,7 +192,8 @@ function Get-AgentArch {
     if ($env:PROCESSOR_ARCHITEW6432) {
         $arch = $env:PROCESSOR_ARCHITEW6432
     }
-    if ($arch -eq "ARM64") {
+    $script:IsArm64Host = ($arch -eq "ARM64")
+    if ($script:IsArm64Host) {
         return "windows-arm64.zip"
     } else {
         return "windows-x86_64.zip"
@@ -200,6 +201,11 @@ function Get-AgentArch {
 }
 $agentPkg = Get-AgentArch
 Write-Output "$(Get-FormattedDate) Detected architecture, using package: $agentPkg"
+
+# Sysmon ships a native ARM64 binary (Sysmon64a.exe); the x64 driver (Sysmon64.exe) cannot
+# load on ARM64 Windows since kernel-mode drivers are not covered by WOW64/x64 emulation.
+$sysmonExe = if ($IsArm64Host) { "Sysmon64a.exe" } else { "Sysmon64.exe" }
+Write-Output "$(Get-FormattedDate) Using Sysmon binary: $sysmonExe"
 
 # check if fleetURL was passed on the console
 if ($fleetURL) {
@@ -498,7 +504,7 @@ function CopyFilesToDir {
                 # Verify if files were extracted.
                 if (Test-Path "$InstallDIR\sysmon\Sysmon.exe") {
                     Write-Verbose "$(Get-FormattedDate) Sysmon copied successfully."
-                    Write-Verbose "$(Get-FormattedDate) Sysmon64.exe copied successfully."
+                    Write-Verbose "$(Get-FormattedDate) $sysmonExe copied successfully."
                     $copySuccessful = $true
                 } else {
                     Write-Error "$(Get-FormattedDate) Sysmon failed to copy to $($InstallDIR)"
@@ -607,9 +613,9 @@ function Uninstall-Perch {
 # Function to install Sysmon64 and configure it
 function Install-Sysmon64 {
     param ()
-    Write-Output "$(Get-FormattedDate) Installing Sysmon64" 
+    Write-Output "$(Get-FormattedDate) Installing Sysmon64"
     try {
-        $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon64.exe" -ArgumentList "-accepteula -i" -NoNewWindow -PassThru
+        $process = Start-Process -FilePath "$InstallDIR\sysmon\$sysmonExe" -ArgumentList "-accepteula -i" -NoNewWindow -PassThru
         $handle = $process.Handle  # Cache the process handle
         $process.WaitForExit()
 
@@ -634,11 +640,12 @@ function Install-Sysmon64 {
 # Function to configure running Sysmon64
 function Set-Sysmon64 {
     param ()
-    $sysmon64 = Get-Service -Name 'Sysmon64' -ErrorAction SilentlyContinue
+    # Wildcard match: the ARM64 driver (Sysmon64a.exe) registers as service "Sysmon64a", not "Sysmon64"
+    $sysmon64 = Get-Service -Name 'Sysmon64*' -ErrorAction SilentlyContinue
     if ($sysmon64) {
         try {
-            Write-Output  "$(Get-FormattedDate) Setting the configuration for Sysmon64." 
-            $process = Start-Process -FilePath "$InstallDIR\sysmon\sysmon64.exe" -ArgumentList "-c `"$InstallDIR\configs\UNS-Sysmon.xml`"" -NoNewWindow -PassThru
+            Write-Output  "$(Get-FormattedDate) Setting the configuration for Sysmon64."
+            $process = Start-Process -FilePath "$InstallDIR\sysmon\$sysmonExe" -ArgumentList "-c `"$InstallDIR\configs\UNS-Sysmon.xml`"" -NoNewWindow -PassThru
             $handle = $process.Handle  # Cache the process handle
             $process.WaitForExit()
 
@@ -974,7 +981,7 @@ try {
         {Write-Verbose "$(Get-FormattedDate) Perch is not installed on the system"
     }
     if ($null -eq (Get-Service -Name "Sysmon" -ErrorAction SilentlyContinue)) {
-        if ((Get-Service -Name "Sysmon64" -ErrorAction SilentlyContinue)) {
+        if ((Get-Service -Name "Sysmon64*" -ErrorAction SilentlyContinue)) {
             Write-Verbose "$(Get-FormattedDate) Sysmon64 already installed."
         } else {
             Write-Verbose "$(Get-FormattedDate) Sysmon64 not installed on the system. Installing..."
@@ -993,7 +1000,7 @@ try {
         Start-Sleep -Seconds 1
     }
 
-    if (($null -eq (Get-Service -Name Perch*)) -and (Get-Service -Name Sysmon64)) { 
+    if (($null -eq (Get-Service -Name Perch*)) -and (Get-Service -Name Sysmon64*)) {
         Install-ElasticAgent
             if ($null -ne (Get-Service -ServiceName "Elastic Agent")) {
                 Write-Verbose "$(Get-FormattedDate) UNS SIEM Agent successfully installed"
