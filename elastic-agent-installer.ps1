@@ -173,7 +173,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # Fetch agent version from remote, fall back to hardcoded default
-$agentVersion = "9.5.4"
+$agentVersion = "8.19.21"
 try {
     $remoteVersion = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/unsinc/siemagent/refs/heads/main/agent-version" -UseBasicParsing -ErrorAction Stop).Content.Trim()
     if ($remoteVersion -match '^\d+\.\d+\.\d+$') {
@@ -186,18 +186,17 @@ try {
 }
 Write-Output "$(Get-FormattedDate) Using Elastic Agent version: $agentVersion"
 
-# Detect processor architecture so the correct Elastic Agent package is downloaded
+# Detect processor architecture. Elastic Agent has no native windows-arm64 build in the
+# 8.19.x line (native ARM64 only shipped from 9.2.0 onward, which is newer than our Fleet
+# Server), so we always fetch windows-x86_64.zip and let ARM64 hosts run it under Windows'
+# built-in x64 emulation - fine for a user-mode agent, unlike Sysmon's kernel driver below.
 function Get-AgentArch {
     $arch = $env:PROCESSOR_ARCHITECTURE
     if ($env:PROCESSOR_ARCHITEW6432) {
         $arch = $env:PROCESSOR_ARCHITEW6432
     }
     $script:IsArm64Host = ($arch -eq "ARM64")
-    if ($script:IsArm64Host) {
-        return "windows-arm64.zip"
-    } else {
-        return "windows-x86_64.zip"
-    }
+    return "windows-x86_64.zip"
 }
 $agentPkg = Get-AgentArch
 Write-Output "$(Get-FormattedDate) Detected architecture, using package: $agentPkg"
