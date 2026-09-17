@@ -34,6 +34,10 @@ If you want to deploy from local files, make sure script in positioned where fil
 If you'd like to choose custom destination file path, please select -datapath. Ex. -datapath C:\temp
 .\elastic-agent-installer.ps1 -datapath C:\temp
 
+.EXAMPLE
+If you'd like to tag the agent at enrollment, provide one or more comma-separated tags with -tag.
+.\elastic-agent-installer.ps1 -token <elastic enrollment token> -fleetURL <url> -tag "prod,workstation"
+
 .LINK
 https://github.com/unsinc/siemagent/blob/main/README.md
 
@@ -51,6 +55,9 @@ To be used with $datapth. When passed, script will look for files stored under d
 
 .PARAMETER insecure
 To be used with self signed fleet certificates 
+
+.PARAMETER tag
+Use this switch to assign one or more comma-separated tags to the agent at enrollment, e.g. -tag "prod,workstation". If omitted, no --tag switch is passed to the installer.
 
 #>
 [CmdletBinding()]
@@ -73,6 +80,10 @@ param
     [Parameter(Mandatory = $false)]
     [switch]$insecure,
 
+    [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
+    [ValidatePattern("^[a-zA-Z0-9_.-]+(,[a-zA-Z0-9_.-]+)*$")]
+	[string[]]$tag,
+
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
 
@@ -89,6 +100,7 @@ if($invalid_parameter)
 #$token = ""
 #$datapath = (Get-Location)
 #$local = $true
+#$tag = "prod,workstation"
 ###########################################################################################
 
 # check if server is 2012 and apply different policy with no defend, until they update them. 
@@ -849,10 +861,14 @@ function Install-ElasticAgent {
             if ($insecure) {
             $arguments += " --insecure"
             }
+            if ($tag) {
+            $arguments += " --tag=$tag"
+            }
                 
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
             Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
+            Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Tags: $(if ($tag) { $tag } else { '<none>' })"
             Write-Output "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
             Write-Output "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
             

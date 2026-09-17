@@ -7,16 +7,18 @@ REMOTE_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/unsinc/siemagent/
 VERSION="${REMOTE_VERSION:-8.19.16}"
 FLEET_URL=""
 ENROLLMENT_TOKEN=""
+TAG=""
 FORCE=false
 
 # --- Helpers ---
 usage() {
-    echo "Usage: $0 [--force] [--version <version>] [--token <enrollment-token>] [--fleet <fleet URL>]"
+    echo "Usage: $0 [--force] [--version <version>] [--token <enrollment-token>] [--fleet <fleet URL>] [--tag <tag1,tag2,...>]"
     echo ""
     echo "  --force                  Skip checks for running Elastic Agent/Endpoint services."
     echo "  --version <version>      Specify Elastic Agent version (default: $VERSION)."
     echo "  --token <enrollment-token>  Provide the enrollment token directly (non-interactive)."
     echo "  --fleet <fleet-url>      Provide the fleet URL directly (non-interactive)."
+    echo "  --tag <tag1,tag2,...>    Comma-separated list of tags to apply at enrollment. Omitted if not provided."
     echo "  -h, --help               Show this help message."
     exit 1
 }
@@ -47,6 +49,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --fleet)
             FLEET_URL="$2"
+            shift 2
+            ;;
+        --tag)
+            TAG="$2"
             shift 2
             ;;
         -h|--help)
@@ -102,7 +108,11 @@ curl -L -o "/tmp/${FILE}" "${BASE_URL}/${FILE}"
 tar xzvf "/tmp/${FILE}" -C /tmp
 DIR="/tmp/elastic-agent-${VERSION}-linux-${ARCH}"
 cd "$DIR"
-./elastic-agent install --url="$FLEET_URL" --enrollment-token="$ENROLLMENT_TOKEN"
+INSTALL_ARGS=(install --url="$FLEET_URL" --enrollment-token="$ENROLLMENT_TOKEN")
+if [[ -n "$TAG" ]]; then
+    INSTALL_ARGS+=(--tag="$TAG")
+fi
+./elastic-agent "${INSTALL_ARGS[@]}"
 
 cd /
 echo "[INFO] Deleting Elastic Agent temporary files."
