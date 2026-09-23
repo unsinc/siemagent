@@ -59,6 +59,9 @@ To be used with self signed fleet certificates
 .PARAMETER tag
 Use this switch to assign one or more comma-separated tags to the agent at enrollment, e.g. -tag "prod,workstation". If omitted, no --tag switch is passed to the installer.
 
+.PARAMETER uninstallToken
+Use this switch to provide the Elastic Agent uninstall token, required to remove an existing agent whose policy has Agent Tamper Protection enabled (Elastic Defend integration). Without it, removal of a tamper-protected agent/Endpoint installation will fail.
+
 #>
 [CmdletBinding()]
 param
@@ -84,6 +87,9 @@ param
     [ValidatePattern("^[a-zA-Z0-9_.-]+(,[a-zA-Z0-9_.-]+)*$")]
 	[string[]]$tag,
 
+    [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
+	[string[]]$uninstallToken,
+
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
 
@@ -101,6 +107,10 @@ if($invalid_parameter)
 #$datapath = (Get-Location)
 #$local = $true
 #$tag = "prod,workstation"
+# Uninstall token for removing an existing tamper-protected agent/Endpoint install - this is
+# NOT the enrollment token above, it's the per-agent token from Kibana > Fleet > Agents > this
+# host > Uninstall command, only needed when Agent Tamper Protection is enabled on the policy.
+#$uninstallToken = ""
 ###########################################################################################
 
 # check if server is 2012 and apply different policy with no defend, until they update them. 
@@ -802,6 +812,93 @@ function Show-TokenForm {
     return $null
 }
 
+# Function to cleanly remove a pre-existing Elastic Agent / Elastic Endpoint installation
+# before redeploying. When the Elastic Defend integration is enabled on the agent's policy,
+# Fleet installs a second, independent Windows service ("ElasticEndpoint" / "Elastic Endpoint")
+# for endpoint-security.exe, in addition to the "Elastic Agent" service. That Endpoint service
+# self-protects its process/service/files, and if the policy has Agent Tamper Protection
+# enabled, it protects the "Elastic Agent" service too - so a raw Stop-Service/sc.exe delete
+# against just "Elastic Agent" can silently no-op, leaving Endpoint running, files locked, and
+# the next install/rename broken. Prefer the vendor-supported "elastic-agent.exe uninstall",
+# which tears down Agent + Endpoint together and accepts --uninstall-token for tamper-protected
+# policies; fall back to manual service removal (covering both services) only if that binary
+# can't be found, and verify removal instead of assuming success.
+function Remove-ExistingElasticAgent {
+    param ()
+
+    $agentService = Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue
+    $endpointService = Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue
+
+    if (($null -eq $agentService) -and ($null -eq $endpointService)) {
+        Write-Verbose "$(Get-FormattedDate) No existing Elastic Agent/Endpoint installation found."
+        return
+    }
+
+    Write-Output "$(Get-FormattedDate) Existing Elastic Agent/Endpoint installation detected, removing before redeployment, please wait"
+    $existingAgentExe = Join-Path $env:ProgramFiles "Elastic\Agent\elastic-agent.exe"
+    $uninstalled = $false
+
+    if (Test-Path $existingAgentExe) {
+        try {
+            $uninstallArgs = "uninstall --force"
+            if ($uninstallToken) {
+                $uninstallArgs += " --uninstall-token=$($uninstallToken.Trim())"
+            }
+            Write-Verbose "$(Get-FormattedDate) Running supported uninstall via $existingAgentExe"
+            $process = Start-Process -FilePath $existingAgentExe -ArgumentList $uninstallArgs -NoNewWindow -PassThru
+            $handle = $process.Handle  # Cache the process handle so ExitCode is readable after WaitForExit
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) {
+                if (-not $uninstallToken) {
+                    Write-Error "$(Get-FormattedDate) elastic-agent uninstall failed with exit code $($process.ExitCode). If Agent Tamper Protection is enabled on this agent's policy, re-run with -uninstallToken <token>."
+                } else {
+                    Write-Error "$(Get-FormattedDate) elastic-agent uninstall failed with exit code $($process.ExitCode)."
+                }
+            } else {
+                Write-Output "$(Get-FormattedDate) Existing Elastic Agent/Endpoint uninstalled successfully"
+                $uninstalled = $true
+            }
+        }
+        catch {
+            $errorMessage = $_.Exception.Message
+            Write-Error "$(Get-FormattedDate) elastic-agent uninstall threw an error: $errorMessage"
+        }
+    } else {
+        Write-Verbose "$(Get-FormattedDate) $existingAgentExe not found, cannot use supported uninstall path. Falling back to manual service removal."
+    }
+
+    # Manual fallback / safety net: covers the case where the supported uninstall wasn't
+    # available or didn't fully clear both services.
+    if (-not $uninstalled) {
+        foreach ($svcName in @("ElasticEndpoint", "Elastic Agent")) {
+            if (Get-Service -Name $svcName -ErrorAction SilentlyContinue) {
+                Write-Verbose "$(Get-FormattedDate) Manually stopping and deleting service '$svcName'"
+                try {
+                    Stop-Service -Name $svcName -Force -Confirm:$false -ErrorAction SilentlyContinue
+                } catch {}
+                sc.exe delete "$svcName" | Out-Null
+            }
+        }
+    }
+
+    # Verify removal instead of assuming success - a service marked for deletion can briefly
+    # remain visible, and a tamper-protected service may not actually go away at all.
+    $timeoutSeconds = 30
+    $elapsed = 0
+    while ((($null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)) -or ($null -ne (Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue))) -and ($elapsed -lt $timeoutSeconds)) {
+        Start-Sleep -Seconds 2
+        $elapsed += 2
+    }
+
+    $agentStillPresent = $null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)
+    $endpointStillPresent = $null -ne (Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue)
+    if ($agentStillPresent -or $endpointStillPresent) {
+        Write-Error "$(Get-FormattedDate) Failed to fully remove existing installation (Elastic Agent present: $agentStillPresent, ElasticEndpoint present: $endpointStillPresent). This is likely Agent Tamper Protection blocking removal - re-run with -uninstallToken <token>." -ErrorAction Stop
+    }
+
+    Write-Output "$(Get-FormattedDate) Old agent/endpoint services removed, deploying UNS SIEM Agent"
+}
+
 #Function to deploy Elastic Agent
 function Install-ElasticAgent {
     param (
@@ -912,18 +1009,8 @@ function Install-ElasticAgent {
                     Write-Verbose "$(Get-FormattedDate) Installing UNS SIEM Agent..."
                     Write-Output "$(Get-FormattedDate) Installing UNS SIEM Agent..."
 
-                #Delete existing service if exists. It helps during redeployment.
-                if ($null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)) {
-                    Write-Output "$(Get-FormattedDate) Removing old agent service, please wait"
-                    try {
-                        Stop-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue -Force -Confirm:$false
-                        sc.exe delete "Elastic Agent"
-                    }
-                    catch {
-                        Write-Error "Siem agent removal failed, we will try again during deployment of current version."
-                    }
-                    Write-Output "$(Get-FormattedDate) Old agent service removed, deploying UNS SIEM Agent"
-                }
+                #Remove existing agent/endpoint services if present. It helps during redeployment.
+                Remove-ExistingElasticAgent
 
                 # Insalling UNS SIEM Agent
                 $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
