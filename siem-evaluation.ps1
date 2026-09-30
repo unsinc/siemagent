@@ -1,5 +1,18 @@
 ##### EDIT CURRENT VERSION HERE ######
-$defaultVersion = [version]"8.19.5"
+$defaultVersion = [version]"8.19.21"
+
+try {
+    $remoteVersion = (Invoke-RestMethod `
+        -Uri "https://raw.githubusercontent.com/unsinc/siemagent/refs/heads/main/agent-version" `
+        -UseBasicParsing `
+        -ErrorAction Stop).Trim()
+
+    $defaultVersion = [version]$remoteVersion
+    Write-Output "Fetched current SIEM Agent version: $defaultVersion"
+}
+catch {
+    Write-Output "Failed to fetch current SIEM Agent version - using fallback $defaultVersion"
+}
 
 if ($env:requiredVersion -and $env:requiredVersion -notlike "null") {
     try {
@@ -9,7 +22,7 @@ if ($env:requiredVersion -and $env:requiredVersion -notlike "null") {
         $requiredVersion = $defaultVersion
     }
 } else {
-    $requiredVersion = $defaultVersion # Default to preset if no environmental variables are set via automation.
+    $requiredVersion = $defaultVersion
 }
 #####################################
 
