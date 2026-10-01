@@ -990,13 +990,21 @@ function Install-ElasticAgent {
             if ($tag) {
             $arguments += " --tag=$tag"
             }
-                
-            Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
-            Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
-            Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
-            Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Tags: $(if ($tag) { $tag } else { '<none>' })"
-            Write-Output "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
-            Write-Output "$(Get-FormattedDate) UNS SIEM Enrollment token: $token"
+
+			$maskedToken = if ($token -and $token.Length -gt 4) {
+			    $token.Substring(0, 4) + ('*' * ($token.Length - 4))
+			} elseif ($token) {
+			    '*' * $token.Length
+			} else {
+			    '<none>'
+			}
+			
+			Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
+			Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
+			Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Enrollment token: $maskedToken"
+			Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Tags: $(if ($tag) { $tag } else { '<none>' })"
+			Write-Output "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
+			Write-Output "$(Get-FormattedDate) UNS SIEM Enrollment token: $maskedToken"
             
             # additional check if token was provided and value is not null
             if ($null -eq $token) {
