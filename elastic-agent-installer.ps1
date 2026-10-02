@@ -83,8 +83,10 @@ param
     [Parameter(Mandatory = $false)]
     [switch]$insecure,
 
+    # No ValidatePattern here: attributes on a script parameter stay attached to the variable, so a
+    # later hard-coded "$tag = ..." (e.g. injected by NinjaOne) would be re-validated and silently
+    # fail. Tags are normalized and validated below instead.
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
-    [ValidatePattern("^[a-zA-Z0-9_.-]+(,[a-zA-Z0-9_.-]+)*$")]
 	[string[]]$tag,
 
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
@@ -112,6 +114,18 @@ if($invalid_parameter)
 # host > Uninstall command, only needed when Agent Tamper Protection is enabled on the policy.
 #$uninstallToken = ""
 ###########################################################################################
+
+# Normalize tags into the single comma-separated string elastic-agent expects for --tag.
+# Accepts -tag "a,b", -tag a,b (array) or "a, b" (spaces after commas); tags may contain spaces.
+if ($tag) {
+    $tagList = @(($tag -join ',') -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $badTags = @($tagList | Where-Object { $_ -notmatch '^[a-zA-Z0-9_. -]+$' })
+    if ($badTags.Count -gt 0) {
+        Write-Output "[-] Invalid tag(s): $($badTags -join ', '). Tags may only contain letters, numbers, space, '_', '.' and '-'."
+        throw "Invalid tag value"
+    }
+    $tag = $tagList -join ','
+}
 
 # check if server is 2012 and apply different policy with no defend, until they update them. 
 function check_2012 {
@@ -173,6 +187,16 @@ $Version = New-Object Version($DotNetVersionKey.Version)
 $RequiredVersion = New-Object Version("4.5")
 
 
+# Masks a secret for logging: first 4 characters, then asterisks. $token is a [string[]], so it is
+# flattened to a plain string first (otherwise .Length is the element count, not the character count).
+function Get-MaskedSecret {
+    param ($Value)
+    $text = ($Value -join '')
+    if ([string]::IsNullOrEmpty($text)) { return '<none>' }
+    if ($text.Length -gt 4) { return $text.Substring(0, 4) + ('*' * ($text.Length - 4)) }
+    return '*' * $text.Length
+}
+
 # Time function
 function Get-FormattedDate {
     Get-Date -Format "yyyyMMdd_HHmmss"
@@ -228,6 +252,9 @@ Write-Output "$(Get-FormattedDate) Detected architecture, using package: $agentP
 # load on ARM64 Windows since kernel-mode drivers are not covered by WOW64/x64 emulation.
 $sysmonExe = if ($IsArm64Host) { "Sysmon64a.exe" } else { "Sysmon64.exe" }
 Write-Output "$(Get-FormattedDate) Using Sysmon binary: $sysmonExe"
+# Service name the Sysmon binary registers under (Sysmon64.exe -> "Sysmon64", Sysmon64a.exe -> "Sysmon64a").
+# Compared by exact name so a stale wrong-architecture "Sysmon64" service is never mistaken for the native one.
+$sysmonSvcName = [System.IO.Path]::GetFileNameWithoutExtension($sysmonExe)
 
 # check if fleetURL was passed on the console
 if ($fleetURL) {
@@ -235,7 +262,7 @@ Write-Verbose "$(Get-FormattedDate) URL is: $fleetURL"
 }
 # check if token was passed on the console
 if ($token) {
-Write-Verbose "$(Get-FormattedDate) token is: $token"
+Write-Verbose "$(Get-FormattedDate) token is: $(Get-MaskedSecret $token)"
 }
 
 # get current location so we can return to it after the deployment.
@@ -605,33 +632,112 @@ function Uninstall-Sysmon32 {
     $null = $handle
 }
 
+# Returns $true when a wrong-architecture Sysmon64 (x64) registration exists on an ARM64 host:
+# a service whose image path is Sysmon64.exe (checked via WMI and the registry, since a service
+# marked for deletion can linger in either), or the leftover C:\Windows\Sysmon64.exe itself.
+# Sysmon64a (native) never matches: the regex requires "Sysmon64.exe" exactly.
+function Test-WrongArchSysmon64Present {
+    if (-not $IsArm64Host) { return $false }
+    $svc = Get-WmiObject -Class Win32_Service -Filter "Name='Sysmon64'" -ErrorAction SilentlyContinue
+    if ($svc -and ($svc.PathName -match '(?i)Sysmon64\.exe')) { return $true }
+    $reg = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\Sysmon64' -ErrorAction SilentlyContinue
+    if ($reg -and ($reg.ImagePath -match '(?i)Sysmon64\.exe')) { return $true }
+    return (Test-Path -LiteralPath "$env:SystemRoot\Sysmon64.exe")
+}
+
+# Last-resort removal of the stale x64 "Sysmon64" registration and binary when "Sysmon64.exe -u"
+# fails (e.g. exit code 5 / access denied). Deliberately never touches the "SysmonDrv" driver
+# service: the x64 and native builds share that name, so on a host where the native Sysmon is
+# already running it belongs to the working install.
+function Remove-StaleSysmon64Registration {
+    param ()
+    if (Get-Service -Name 'Sysmon64' -ErrorAction SilentlyContinue) {
+        & sc.exe stop Sysmon64 | Out-Null
+        $null = & sc.exe delete Sysmon64
+        if ($LASTEXITCODE -eq 1072) {
+            Write-Output "$(Get-FormattedDate) Stale Sysmon64 service is marked for deletion; it will be removed after a reboot"
+        } elseif ($LASTEXITCODE -ne 0) {
+            Write-Output "$(Get-FormattedDate) sc.exe delete Sysmon64 failed with exit code $LASTEXITCODE"
+        }
+    }
+    $staleExe = "$env:SystemRoot\Sysmon64.exe"
+    if (Test-Path -LiteralPath $staleExe) {
+        Remove-Item -LiteralPath $staleExe -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $staleExe) {
+            Write-Output "$(Get-FormattedDate) Could not delete $staleExe (in use or protected)"
+        }
+    }
+}
+
 # Function to remove a wrong-architecture Sysmon64 (x64) driver left over on an ARM64 host,
 # e.g. from before native ARM64 support was added, so it can be replaced with Sysmon64a.exe.
 # Kernel-mode drivers cannot run under WOW64/x64 emulation, so an x64 Sysmon64 install on
-# ARM64 is never actually functional and must be uninstalled with the x64 binary before the
-# native one is installed. Errors here are logged but not fatal so Install-Sysmon64 still runs.
+# ARM64 is never actually functional. Exit code of "-u force" is not trusted on its own: the
+# result is verified afterwards and a manual cleanup is attempted if anything is left behind.
+# If the native Sysmon is already running, "-u force" is skipped entirely (it would also tear
+# down the shared SysmonDrv driver) and only the stale registration is cleaned up.
+# Errors here are logged but not fatal so the caller can continue.
 function Uninstall-Sysmon64WrongArch {
     param ()
-    Write-Output "$(Get-FormattedDate) Wrong-architecture Sysmon64 (x64) driver found on ARM64 host, uninstalling before deploying native $sysmonExe"
-    Write-Verbose "$(Get-FormattedDate) Wrong-architecture Sysmon64 (x64) driver found on ARM64 host, uninstalling before deploying native $sysmonExe"
-    try {
-        $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon64.exe" -ArgumentList "-u force" -NoNewWindow -PassThru
-        $handle = $process.Handle  # Cache the process handle
-        $process.WaitForExit()
-            # Check the exit code
+    Write-Output "$(Get-FormattedDate) Wrong-architecture Sysmon64 (x64) found on ARM64 host, removing it in favour of native $sysmonExe"
+    Write-Verbose "$(Get-FormattedDate) Wrong-architecture Sysmon64 (x64) found on ARM64 host, removing it in favour of native $sysmonExe"
+
+    $native = Get-Service -Name $sysmonSvcName -ErrorAction SilentlyContinue
+    if ($native -and $native.Status -eq 'Running') {
+        Write-Output "$(Get-FormattedDate) Native $sysmonSvcName is already running, cleaning up only the stale Sysmon64 registration (SysmonDrv left untouched)"
+        Remove-StaleSysmon64Registration
+    } else {
+        try {
+            $process = Start-Process -FilePath "$InstallDIR\sysmon\Sysmon64.exe" -ArgumentList "-u force" -NoNewWindow -PassThru
+            $handle = $process.Handle  # Cache the process handle
+            $process.WaitForExit()
             if ($process.ExitCode -ne 0) {
                 throw "Uninstall failed with exit code $($process.ExitCode)"
-            } else {
-                Write-Output  "$(Get-FormattedDate) Uninstalling wrong-architecture Sysmon64 completed"
-                Write-Verbose "$(Get-FormattedDate) Uninstalling wrong-architecture Sysmon64 completed."
             }
+        }
+        catch {
+            $errorMessage = $_.Exception.Message
+            Write-Output "$(Get-FormattedDate) Sysmon64 -u force reported a problem: $errorMessage. Attempting manual cleanup."
+        }
+        #destroy the handle cache
+        $null = $handle
+
+        if (Test-WrongArchSysmon64Present) {
+            Remove-StaleSysmon64Registration
+        }
     }
-    catch {
-        $errorMessage = $_.Exception.Message
-        Write-Error "$(Get-FormattedDate) Error while uninstalling wrong-architecture Sysmon64: $errorMessage"
+
+    if (Test-WrongArchSysmon64Present) {
+        Write-Error "$(Get-FormattedDate) Wrong-architecture Sysmon64 could not be fully removed (service/file still present). A reboot and re-run may be required."
+    } else {
+        Write-Output "$(Get-FormattedDate) Wrong-architecture Sysmon64 removed"
+        Write-Verbose "$(Get-FormattedDate) Wrong-architecture Sysmon64 removed."
     }
-    #destroy the handle cache
-    $null = $handle
+}
+
+# Verifies the Sysmon service this script is supposed to leave behind is actually running.
+# Waits briefly because the service may still be starting right after "-i". Sets $script:SysmonHealthy.
+function Test-Sysmon64Health {
+    param ()
+    $running = $false
+    for ($i = 0; $i -lt 10 -and -not $running; $i++) {
+        $svc = Get-Service -Name $sysmonSvcName -ErrorAction SilentlyContinue
+        $running = ($svc -and $svc.Status -eq 'Running')
+        if (-not $running) { Start-Sleep -Seconds 1 }
+    }
+    $drv = Get-Service -Name 'SysmonDrv' -ErrorAction SilentlyContinue
+    $drvRunning = ($drv -and $drv.Status -eq 'Running')
+
+    if ($running -and $drvRunning) {
+        Write-Output "$(Get-FormattedDate) Sysmon health check passed: $sysmonSvcName and SysmonDrv are running"
+    } else {
+        Write-Error "$(Get-FormattedDate) Sysmon health check failed: $sysmonSvcName running=$running, SysmonDrv running=$drvRunning"
+    }
+    if (Test-WrongArchSysmon64Present) {
+        Write-Output "$(Get-FormattedDate) Warning: stale wrong-architecture Sysmon64 registration is still present on this host"
+    }
+    # Result goes in a script-scope flag, not the pipeline: the Write-Output lines above would pollute a return value.
+    $script:SysmonHealthy = [bool]($running -and $drvRunning)
 }
 
 # Uninstall Perch
@@ -691,8 +797,9 @@ function Install-Sysmon64 {
 # Function to configure running Sysmon64
 function Set-Sysmon64 {
     param ()
-    # Wildcard match: the ARM64 driver (Sysmon64a.exe) registers as service "Sysmon64a", not "Sysmon64"
-    $sysmon64 = Get-Service -Name 'Sysmon64*' -ErrorAction SilentlyContinue
+    # Exact name: the ARM64 driver (Sysmon64a.exe) registers as service "Sysmon64a", not "Sysmon64",
+    # and a wildcard would also match a stale wrong-architecture "Sysmon64" service.
+    $sysmon64 = Get-Service -Name $sysmonSvcName -ErrorAction SilentlyContinue
     if ($sysmon64) {
         try {
             Write-Output  "$(Get-FormattedDate) Setting the configuration for Sysmon64."
@@ -958,14 +1065,14 @@ function Install-ElasticAgent {
                     Write-Verbose "$(Get-FormattedDate) Fleet URL is already provided: $fleetURL"
                     Write-Verbose "$(Get-FormattedDate) Missing token. Initiating form input."
                     $token = Show-TokenForm
-                    if (($null -eq $token) -or ($token.Length -lt 30)) {
+                    if (($null -eq $token) -or ((($token -join '').Length) -lt 30)) {
                         Write-Error "$(Get-FormattedDate): Token is empty or too short. Seems that the user cancelled the input or did not provided required value" -ErrorAction Stop
                     }
                 } elseif (($token) -and (-not $fleetURL)) {
-                    Write-Verbose "$(Get-FormattedDate) Token is already provided: $token"
+                    Write-Verbose "$(Get-FormattedDate) Token is already provided: $(Get-MaskedSecret $token)"
                     Write-Verbose "$(Get-FormattedDate) Missing FleetURL. Initiating form input."
                     $fleetURL = Show-TokenForm
-                    if (($null -eq $fleetURL) -or ($fleetURL.Length -lt 30)) {
+                    if (($null -eq $fleetURL) -or ((($fleetURL -join '').Length) -lt 30)) {
                         Write-Error "$(Get-FormattedDate): fleetURL is empty or too short. Seems that the user cancelled the input or did not provided required values" -ErrorAction Stop
                     }
                     Write-Verbose "$(Get-FormattedDate) FleetURL provided: $fleetURL"
@@ -988,16 +1095,11 @@ function Install-ElasticAgent {
             $arguments += " --insecure"
             }
             if ($tag) {
-            $arguments += " --tag=$tag"
+            # quoted because tags may contain spaces; the list itself is comma-separated per Elastic docs
+            $arguments += " --tag=`"$tag`""
             }
 
-			$maskedToken = if ($token -and $token.Length -gt 4) {
-			    $token.Substring(0, 4) + ('*' * ($token.Length - 4))
-			} elseif ($token) {
-			    '*' * $token.Length
-			} else {
-			    '<none>'
-			}
+			$maskedToken = Get-MaskedSecret $token
 			
 			Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM Agent Install Path: $agentinstallPath"
 			Write-Verbose -Message "$(Get-FormattedDate) UNS SIEM fleet URL: $fleetURL"
@@ -1121,33 +1223,25 @@ try {
         {Write-Verbose "$(Get-FormattedDate) Perch is not installed on the system"
     }
     if ($null -eq (Get-Service -Name "Sysmon" -ErrorAction SilentlyContinue)) {
-        $sysmonServices = @(Get-Service -Name "Sysmon64*" -ErrorAction SilentlyContinue)
+        $nativeSysmon = Get-Service -Name $sysmonSvcName -ErrorAction SilentlyContinue
 
-        # On ARM64, check the *installed binary path* (not just the service name) for any
-        # matching service - a leftover x64 Sysmon64.exe driver never actually loads on ARM64
-        # (kernel drivers can't run under emulation), so it needs replacing with Sysmon64a.exe.
-        $wrongArchSysmon64 = $false
-        if ($IsArm64Host -and $sysmonServices.Count -gt 0) {
-            foreach ($svc in $sysmonServices) {
-                $svcInfo = Get-WmiObject -Class Win32_Service -Filter "Name='$($svc.Name)'" -ErrorAction SilentlyContinue
-                if ($svcInfo -and ($svcInfo.PathName -match '(?i)Sysmon64\.exe')) {
-                    $wrongArchSysmon64 = $true
-                }
-            }
-        }
-
-        if ($wrongArchSysmon64) {
+        # On ARM64 a leftover x64 Sysmon64.exe registration never actually loads (kernel drivers
+        # can't run under emulation) and must be replaced by the native Sysmon64a.exe. Detection is
+        # by exact service name/path, so a stale Sysmon64 is not confused with a healthy Sysmon64a.
+        if (Test-WrongArchSysmon64Present) {
             Write-Verbose "$(Get-FormattedDate) Wrong-architecture Sysmon64 (x64) detected on ARM64 host. Replacing with native $sysmonExe..."
             Uninstall-Sysmon64WrongArch
             Start-Sleep -Seconds 1
-            Install-Sysmon64
-            Start-Sleep -Seconds 1
+            if (-not (Get-Service -Name $sysmonSvcName -ErrorAction SilentlyContinue)) {
+                Install-Sysmon64
+                Start-Sleep -Seconds 1
+            }
             Set-Sysmon64
             Start-Sleep -Seconds 1
-        } elseif ($sysmonServices.Count -gt 0) {
-            Write-Verbose "$(Get-FormattedDate) Sysmon64 already installed."
+        } elseif ($nativeSysmon) {
+            Write-Verbose "$(Get-FormattedDate) $sysmonSvcName already installed."
         } else {
-            Write-Verbose "$(Get-FormattedDate) Sysmon64 not installed on the system. Installing..."
+            Write-Verbose "$(Get-FormattedDate) $sysmonSvcName not installed on the system. Installing..."
             Install-Sysmon64
             Set-Sysmon64
         }
@@ -1163,7 +1257,11 @@ try {
         Start-Sleep -Seconds 1
     }
 
-    if (($null -eq (Get-Service -Name Perch*)) -and (Get-Service -Name Sysmon64*)) {
+    Test-Sysmon64Health
+
+    # Gate on the expected service by exact name; a stale wrong-architecture Sysmon64 must not satisfy it.
+    # Not-running is reported by the health check above but does not block the SIEM agent deployment.
+    if (($null -eq (Get-Service -Name Perch*)) -and (Get-Service -Name $sysmonSvcName -ErrorAction SilentlyContinue)) {
         Install-ElasticAgent
             if ($null -ne (Get-Service -ServiceName "Elastic Agent")) {
                 Write-Verbose "$(Get-FormattedDate) UNS SIEM Agent successfully installed"
