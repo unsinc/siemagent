@@ -200,8 +200,9 @@ function check_windows_role_tags {
         default { return "Windows, Workstation" }
     }
 }
-# uncomment here (replaces any -tag value passed on the command line):
-#$tag = check_windows_role_tags
+# uncomment here (keeps the tag(s) you set above / passed with -tag and adds the role tags to them,
+# e.g. $tag = "Green Hills" on a DC becomes "Green Hills,Windows,Server,Active Directory"):
+#$tag = @($tag) + (check_windows_role_tags)
 
 # Same idea as check_windows_role, but returns the uninstall token for the policy this machine's
 # role is enrolled in. Uninstall tokens are per agent policy (Kibana > Fleet > Uninstall tokens),
@@ -225,13 +226,14 @@ function check_windows_role_uninstall_token {
         }
     }
 }
-# uncomment here (replaces any -uninstallToken value passed on the command line):
-#$uninstallToken = check_windows_role_uninstall_token
+# uncomment here (only used when no uninstall token was set above / passed with -uninstallToken):
+#if (-not $uninstallToken) { $uninstallToken = check_windows_role_uninstall_token }
 
 # Normalize tags into the single comma-separated string elastic-agent expects for --tag.
 # Accepts -tag "a,b", -tag a,b (array) or "a, b" (spaces after commas); tags may contain spaces.
 if ($tag) {
-    $tagList = @(($tag -join ',') -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $seenTags = @{}   # hashtable keys are case-insensitive, so "windows" and "Windows" count as one tag
+    $tagList = @(($tag -join ',') -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $seenTags.ContainsKey($_) -and ($seenTags[$_] = $true) })
     $badTags = @($tagList | Where-Object { $_ -notmatch '^[a-zA-Z0-9_. -]+$' })
     if ($badTags.Count -gt 0) {
         Write-Output "[-] Invalid tag(s): $($badTags -join ', '). Tags may only contain letters, numbers, space, '_', '.' and '-'."
