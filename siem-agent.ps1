@@ -165,29 +165,39 @@ $deployTimeoutMinutes = 5
 # it cut off before the real error appears). This reads the captured output and prints it without
 # the spinner: each install stage once, and JSON log lines as "[level] message".
 function Format-ElasticInstallOutput {
-    param ([string]$Path)
+    param ([string]$Path, [int]$MaxLines = 60)
 
     if (-not (Test-Path $Path)) { return }
     $text = Get-Content -Path $Path -Raw -ErrorAction SilentlyContinue
     if ([string]::IsNullOrWhiteSpace($text)) { return }
 
+    $out = New-Object System.Collections.Generic.List[string]
     $lastStage = $null
     foreach ($raw in ($text -split "[\r\n]+")) {
         $line = $raw.Trim()
         if (-not $line) { continue }
-        if ($line -match '^\[[ =]{4}\]\s*(.*?)\s*\[\d+s\]\s*(.*)$') {
+        # spinner frame, e.g. "[  ==] Waiting For Enroll...  [5s]" or "... [1m9s]"
+        if ($line -match '^\[[ =]{4}\]\s*(.*?)\s*\[[0-9hms]+\]\s*(.*)$') {
             $stage = $Matches[1]
             $line = $Matches[2].Trim()
-            if ($stage -and ($stage -ne $lastStage)) { Write-Output "    $stage"; $lastStage = $stage }
+            if ($stage -and ($stage -ne $lastStage)) { $out.Add("    $stage"); $lastStage = $stage }
             if (-not $line) { continue }
         }
+        # on failure the installer dumps its whole debug log; the useful part is above it
+        if ($line -match '^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(DEBUG|TRACE)\b') { continue }
         if ($line.StartsWith('{')) {
             try {
                 $entry = $line | ConvertFrom-Json -ErrorAction Stop
-                if ($entry.message) { Write-Output ("    [{0}] {1}" -f $entry.'log.level', $entry.message); continue }
+                if ($entry.message) { $out.Add(("    [{0}] {1}" -f $entry.'log.level', $entry.message)); continue }
             } catch { }
         }
-        Write-Output "    $line"
+        if ($line.Length -gt 400) { $line = $line.Substring(0, 400) + '...' }
+        $out.Add("    $line")
+    }
+
+    if ($out.Count -le $MaxLines) { $out } else {
+        $out | Select-Object -First $MaxLines
+        Write-Output "    ... $($out.Count - $MaxLines) more lines omitted"
     }
 }
 
@@ -222,6 +232,26 @@ function Write-SiemDiagnostics {
             $message = ($event.Message -replace '\s+', ' ')
             if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
             Write-Output "Windows service log $($event.TimeCreated.ToString('HH:mm:ss')): $message"
+        }
+    } catch { }
+
+    try {
+        $crashes = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error'; StartTime = (Get-Date).AddMinutes(-30) } -ErrorAction Stop |
+            Where-Object { $_.Message -match 'elastic|endpoint-security' } | Select-Object -First 3)
+        foreach ($crash in $crashes) {
+            $message = ($crash.Message -replace '\s+', ' ')
+            if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+            Write-Output "Application crash $($crash.TimeCreated.ToString('HH:mm:ss')): $message"
+        }
+    } catch { }
+
+    try {
+        $blocks = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; Id = 1116, 1117, 1121, 1122; StartTime = (Get-Date).AddMinutes(-30) } -ErrorAction Stop |
+            Where-Object { $_.Message -match 'elastic|Elastic' } | Select-Object -First 3)
+        foreach ($block in $blocks) {
+            $message = ($block.Message -replace '\s+', ' ')
+            if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+            Write-Output "Windows Defender $($block.TimeCreated.ToString('HH:mm:ss')): $message"
         }
     } catch { }
 
