@@ -115,18 +115,6 @@ if($invalid_parameter)
 #$uninstallToken = ""
 ###########################################################################################
 
-# Normalize tags into the single comma-separated string elastic-agent expects for --tag.
-# Accepts -tag "a,b", -tag a,b (array) or "a, b" (spaces after commas); tags may contain spaces.
-if ($tag) {
-    $tagList = @(($tag -join ',') -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    $badTags = @($tagList | Where-Object { $_ -notmatch '^[a-zA-Z0-9_. -]+$' })
-    if ($badTags.Count -gt 0) {
-        Write-Output "[-] Invalid tag(s): $($badTags -join ', '). Tags may only contain letters, numbers, space, '_', '.' and '-'."
-        throw "Invalid tag value"
-    }
-    $tag = $tagList -join ','
-}
-
 # check if server is 2012 and apply different policy with no defend, until they update them. 
 function check_2012 {
     (Get-WmiObject -Class Win32_OperatingSystem).Caption -match "2012"
@@ -175,6 +163,83 @@ function check_windows_role {
 }
 # uncomment here:
 #$token = check_windows_role
+
+# Works out what kind of machine this is, so the tag / uninstall token functions below can share it.
+# Returns: Workstation, Server, HyperV or DomainController. A DC always reports DomainController,
+# even when it also happens to have the Hyper-V role installed.
+function get_windows_role_type {
+
+    $role = (Get-WmiObject Win32_ComputerSystem).DomainRole
+    if (($role -eq 4) -or ($role -eq 5)) {
+        return "DomainController"
+    }
+    elseif (($role -eq 2) -or ($role -eq 3)) {
+        # Get-WindowsFeature only exists on Windows Server (and needs ServerManager on 2008 R2),
+        # so a failure here just means "not a Hyper-V host" rather than stopping the install.
+        try {
+            $hypervrole = (Get-WindowsFeature -Name Hyper-V -ErrorAction Stop).InstallState -eq "Installed"
+        } catch {
+            $hypervrole = $false
+        }
+        if ($hypervrole) {
+            return "HyperV"
+        }
+        return "Server"
+    }
+    return "Workstation"
+}
+
+# Same idea as check_windows_role, but returns the agent tags for this machine's role instead of
+# an enrollment token. Edit the tag lists below to change what each role gets.
+function check_windows_role_tags {
+
+    switch (get_windows_role_type) {
+        "DomainController" { return "Windows, Server, Active Directory" }
+        "HyperV"           { return "Windows, Server, HyperV" }
+        "Server"           { return "Windows, Server" }
+        default { return "Windows, Workstation" }
+    }
+}
+# uncomment here (replaces any -tag value passed on the command line):
+#$tag = check_windows_role_tags
+
+# Same idea as check_windows_role, but returns the uninstall token for the policy this machine's
+# role is enrolled in. Uninstall tokens are per agent policy (Kibana > Fleet > Uninstall tokens),
+# so paste the token of each role's policy below. An empty string means "no token supplied".
+function check_windows_role_uninstall_token {
+
+    switch (get_windows_role_type) {
+        "DomainController" {
+            if (check_2012) { return "" } else { return "" }
+        }
+        "HyperV" {
+            # if you have hyper-v policy
+            if (check_2012) { return "" } else { return "" }
+        }
+        "Server" {
+            if (check_2012) { return "" } else { return "" }
+        }
+        default {
+            # add workstations here if needed
+            return ""
+        }
+    }
+}
+# uncomment here (replaces any -uninstallToken value passed on the command line):
+#$uninstallToken = check_windows_role_uninstall_token
+
+# Normalize tags into the single comma-separated string elastic-agent expects for --tag.
+# Accepts -tag "a,b", -tag a,b (array) or "a, b" (spaces after commas); tags may contain spaces.
+if ($tag) {
+    $tagList = @(($tag -join ',') -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $badTags = @($tagList | Where-Object { $_ -notmatch '^[a-zA-Z0-9_. -]+$' })
+    if ($badTags.Count -gt 0) {
+        Write-Output "[-] Invalid tag(s): $($badTags -join ', '). Tags may only contain letters, numbers, space, '_', '.' and '-'."
+        throw "Invalid tag value"
+    }
+    $tag = $tagList -join ','
+}
+
 
 if (($local) -and (-not $datapath)) {
     Write-Verbose "-local was provided without -datapath. dataPath will default to current script location."
