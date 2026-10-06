@@ -114,10 +114,12 @@ if($invalid_parameter)
 # host > Uninstall command, only needed when Agent Tamper Protection is enabled on the policy.
 #$uninstallToken = ""
 
-# --- Per-role tokens, used by check_windows_role / check_windows_role_uninstall_token below ---
-# Only needed if you use the role functions (see "uncomment here" below) to deploy every kind of
-# endpoint from one task. Leave a value empty ("") to skip that role: an empty value never
-# overwrites a token you set or passed above.
+# --- Per-role tokens and tags, applied automatically (nothing else to uncomment) ---
+# Lets one task deploy every kind of endpoint: the script detects the machine's role and uses that
+# role's tokens below, and adds the role's tags (Windows + Workstation / Server / HyperV / Active
+# Directory) after the client tag above. A token you set or pass yourself ($token / -token,
+# $uninstallToken / -uninstallToken) always wins. Leave a role's value empty ("") if it has none.
+#$disableRoleTags = $true   # uncomment to add no role tags
 #
 # Enrollment tokens: Kibana > Fleet > Enrollment tokens (one per agent policy).
 #$tokenWorkstation  = ""   # Policy: Workstations
@@ -184,8 +186,9 @@ function check_windows_role {
         return $tokenWorkstation
     }
 }
-# uncomment here (an empty role token keeps whatever -token / $token was set to):
-#$roleToken = check_windows_role; if ($roleToken) { $token = $roleToken }
+# Applied automatically: when no -token / $token was given, use the role token set at the top.
+# An empty role token changes nothing.
+if (-not $token) { $roleToken = check_windows_role; if ($roleToken) { $token = $roleToken } }
 
 # Works out what kind of machine this is, so the tag / uninstall token functions below can share it.
 # Returns: Workstation, Server, HyperV or DomainController. A DC always reports DomainController,
@@ -223,9 +226,10 @@ function check_windows_role_tags {
         default { return "Windows, Workstation" }
     }
 }
-# uncomment here (keeps the tag(s) you set above / passed with -tag and adds the role tags to them,
-# e.g. $tag = "Client 1" on a DC becomes "Client 1,Windows,Server,Active Directory"):
-#$tag = @($tag) + (check_windows_role_tags)
+# Applied automatically: keeps the tag(s) you set above / passed with -tag and adds the role tags to
+# them, e.g. $tag = "Client 1" on a DC becomes "Client 1,Windows,Server,Active Directory".
+# Set $disableRoleTags = $true in the hard-coded section at the top to turn this off.
+if (-not $disableRoleTags) { $tag = @($tag) + (check_windows_role_tags) }
 
 # Same idea as check_windows_role, but returns the uninstall token for the policy this machine's
 # role is enrolled in. Set the tokens in the per-role variables at the top. An empty value means
@@ -246,8 +250,8 @@ function check_windows_role_uninstall_token {
         default { return $uninstallTokenWorkstation }
     }
 }
-# uncomment here (only used when no uninstall token was set above / passed with -uninstallToken):
-#if (-not $uninstallToken) { $uninstallToken = check_windows_role_uninstall_token }
+# Applied automatically: only used when no uninstall token was set above / passed with -uninstallToken.
+if (-not $uninstallToken) { $uninstallToken = check_windows_role_uninstall_token }
 
 # Normalize tags into the single comma-separated string elastic-agent expects for --tag.
 # Accepts -tag "a,b", -tag a,b (array) or "a, b" (spaces after commas); tags may contain spaces.

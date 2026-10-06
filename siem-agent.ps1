@@ -106,6 +106,139 @@ param
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
 
+######## Evaluation / deployment settings ##########
+# Offline fallback for the required agent version. The real source is agent-version on GitHub; this
+# is only used when GitHub can't be reached.
+$defaultVersion = [version]"9.5.4"
+
+# Seconds to wait between the end of the deployment and the confirmation check.
+$recheckDelaySeconds = 15
+
+# Longest the deployment may run before it is stopped (a hung deployment would otherwise block
+# the confirmation check and the status report forever).
+$deployTimeoutMinutes = 5
+####################################################
+
+######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
+#$fleetURL = ""
+#$token = ""
+#$datapath = (Get-Location)
+#$local = $true
+#$tag = "prod,workstation"
+# Uninstall token for removing an existing tamper-protected agent/Endpoint install - this is
+# NOT the enrollment token above, it's the per-agent token from Kibana > Fleet > Agents > this
+# host > Uninstall command, only needed when Agent Tamper Protection is enabled on the policy.
+#$uninstallToken = ""
+
+# --- Per-role tokens and tags, applied automatically (nothing else to uncomment) ---
+# Lets one task deploy every kind of endpoint: the script detects the machine's role and uses that
+# role's tokens below, and adds the role's tags (Windows + Workstation / Server / HyperV / Active
+# Directory) after the client tag above. A token you set or pass yourself ($token / -token,
+# $uninstallToken / -uninstallToken) always wins. Leave a role's value empty ("") if it has none.
+#$disableRoleTags = $true   # uncomment to add no role tags
+#
+# Enrollment tokens: Kibana > Fleet > Enrollment tokens (one per agent policy).
+#$tokenWorkstation  = ""   # Policy: Workstations
+#$tokenServer       = ""   # Policy: Servers (standalone / member server, no Hyper-V)
+#$tokenServer2012   = ""   # Policy: Servers - Windows Server 2012 (no Defend)
+#$tokenHyperV       = ""   # Policy: Hyper-V hosts
+#$tokenHyperV2012   = ""   # Policy: Hyper-V hosts - Windows Server 2012 (no Defend)
+#$tokenDC           = ""   # Policy: Domain Controllers
+#$tokenDC2012       = ""   # Policy: Domain Controllers - Windows Server 2012 (no Defend)
+#
+# Uninstall tokens: Kibana > Fleet > Uninstall tokens (one per agent policy, so each role's
+# uninstall token belongs to the same policy as its enrollment token above).
+#$uninstallTokenWorkstation = ""   # Policy: Workstations
+#$uninstallTokenServer      = ""   # Policy: Servers
+#$uninstallTokenServer2012  = ""   # Policy: Servers - Windows Server 2012
+#$uninstallTokenHyperV      = ""   # Policy: Hyper-V hosts
+#$uninstallTokenHyperV2012  = ""   # Policy: Hyper-V hosts - Windows Server 2012
+#$uninstallTokenDC          = ""   # Policy: Domain Controllers
+#$uninstallTokenDC2012      = ""   # Policy: Domain Controllers - Windows Server 2012
+###########################################################################################
+
+# ======================================================================================
+# Diagnostics helpers (used by the deployment and by the final NEEDS_REVIEW report)
+# ======================================================================================
+
+# elastic-agent install redraws a spinner on every tick, which floods the NinjaOne output (and gets
+# it cut off before the real error appears). This reads the captured output and prints it without
+# the spinner: each install stage once, and JSON log lines as "[level] message".
+function Format-ElasticInstallOutput {
+    param ([string]$Path)
+
+    if (-not (Test-Path $Path)) { return }
+    $text = Get-Content -Path $Path -Raw -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($text)) { return }
+
+    $lastStage = $null
+    foreach ($raw in ($text -split "[\r\n]+")) {
+        $line = $raw.Trim()
+        if (-not $line) { continue }
+        if ($line -match '^\[[ =]{4}\]\s*(.*?)\s*\[\d+s\]\s*(.*)$') {
+            $stage = $Matches[1]
+            $line = $Matches[2].Trim()
+            if ($stage -and ($stage -ne $lastStage)) { Write-Output "    $stage"; $lastStage = $stage }
+            if (-not $line) { continue }
+        }
+        if ($line.StartsWith('{')) {
+            try {
+                $entry = $line | ConvertFrom-Json -ErrorAction Stop
+                if ($entry.message) { Write-Output ("    [{0}] {1}" -f $entry.'log.level', $entry.message); continue }
+            } catch { }
+        }
+        Write-Output "    $line"
+    }
+}
+
+# Prints what is known about a failed deployment: service state, whether the Fleet server answers,
+# Windows service-start errors and the agent's own recent errors. Read-only, and never throws.
+function Write-SiemDiagnostics {
+    Write-Output "---- UNS SIEM Agent diagnostics ----"
+
+    try {
+        $services = @(Get-Service -Name "Elastic Agent", "ElasticEndpoint" -ErrorAction SilentlyContinue)
+        if ($services.Count -eq 0) { Write-Output "Services: none installed (the failed install was rolled back or never started)" }
+        foreach ($service in $services) { Write-Output "Service '$($service.Name)': $($service.Status)" }
+    } catch { Write-Output "Services: could not be read ($($_.Exception.Message))" }
+
+    try {
+        $fleetUri = [uri](($fleetURL -join '').Trim())
+        $port = if ($fleetUri.Port -gt 0) { $fleetUri.Port } else { 443 }
+        $client = New-Object System.Net.Sockets.TcpClient
+        $connect = $client.BeginConnect($fleetUri.Host, $port, $null, $null)
+        if ($connect.AsyncWaitHandle.WaitOne(5000) -and $client.Connected) {
+            Write-Output "Fleet server $($fleetUri.Host):$port is reachable"
+        } else {
+            Write-Output "Fleet server $($fleetUri.Host):$port is NOT reachable (blocked by firewall/proxy, or DNS problem)"
+        }
+        $client.Close()
+    } catch { Write-Output "Fleet server: reachability check failed ($($_.Exception.Message))" }
+
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager'; StartTime = (Get-Date).AddMinutes(-30) } -ErrorAction Stop |
+            Where-Object { $_.Message -match 'Elastic|UNS SIEM' } | Select-Object -First 5)
+        foreach ($event in $events) {
+            $message = ($event.Message -replace '\s+', ' ')
+            if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+            Write-Output "Windows service log $($event.TimeCreated.ToString('HH:mm:ss')): $message"
+        }
+    } catch { }
+
+    try {
+        $logFile = Get-ChildItem -Path "$env:ProgramFiles\Elastic\Agent\data\*\logs\*.ndjson" -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($logFile) {
+            $errors = @(Get-Content -Path $logFile.FullName -Tail 300 -ErrorAction SilentlyContinue | Where-Object { $_ -match '"log.level":"error"' } | Select-Object -Last 6)
+            foreach ($errorLine in $errors) {
+                try { Write-Output ("Agent log error: " + ($errorLine | ConvertFrom-Json -ErrorAction Stop).message) } catch { Write-Output "Agent log error: $errorLine" }
+            }
+        }
+    } catch { }
+
+    Write-Output "------------------------------------"
+}
+
 # ======================================================================================
 # Evaluate -> deploy -> re-check
 # Without -InstallOnly this script first evaluates the UNS SIEM Agent (same checks, output and
@@ -118,9 +251,7 @@ param
 # ======================================================================================
 if (-not $InstallOnly) {
 
-    ##### EDIT CURRENT VERSION HERE ######
-    $defaultVersion = [version]"9.5.4"
-
+    # $defaultVersion (the offline fallback) is set in the settings block at the top of the script.
     try {
         $remoteVersion = (Invoke-RestMethod `
             -Uri "https://raw.githubusercontent.com/unsinc/siemagent/refs/heads/main/agent-version" `
@@ -148,13 +279,6 @@ if (-not $InstallOnly) {
     $StatusCompliant = "SIEM_AGENT_STATUS: COMPLIANT"
 
     $agentBinaryPath = "$env:ProgramFiles\Elastic\Agent\elastic-agent.exe"
-
-    # Seconds to wait between the end of the deployment and the confirmation check.
-    $recheckDelaySeconds = 15
-
-    # Longest the deployment may run before it is stopped (a hung deployment would otherwise block
-    # the confirmation check and the status report forever).
-    $deployTimeoutMinutes = 5
 
     # Reports an evaluation outcome: sets the NinjaOne property and prints the status marker, and
     # records the outcome in $script:SiemEvalResult (COMPLIANT or ACTION_REQUIRED) for the caller.
@@ -276,6 +400,7 @@ if (-not $InstallOnly) {
     Start-Sleep -Seconds $recheckDelaySeconds
     Invoke-SiemEvaluation -Recheck
     if ($script:SiemEvalResult -ne "COMPLIANT") {
+        Write-SiemDiagnostics
         Set-SiemNeedsReview "UNS SIEM Agent is still not compliant after deployment - manual review required"
         exit 1   # non-zero so NinjaOne shows the action as failed, not SUCCESS
     }
@@ -289,42 +414,6 @@ if($invalid_parameter)
     throw
 
 }
-
-######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
-#$fleetURL = ""
-#$token = ""
-#$datapath = (Get-Location)
-#$local = $true
-#$tag = "prod,workstation"
-# Uninstall token for removing an existing tamper-protected agent/Endpoint install - this is
-# NOT the enrollment token above, it's the per-agent token from Kibana > Fleet > Agents > this
-# host > Uninstall command, only needed when Agent Tamper Protection is enabled on the policy.
-#$uninstallToken = ""
-
-# --- Per-role tokens, used by check_windows_role / check_windows_role_uninstall_token below ---
-# Only needed if you use the role functions (see "uncomment here" below) to deploy every kind of
-# endpoint from one task. Leave a value empty ("") to skip that role: an empty value never
-# overwrites a token you set or passed above.
-#
-# Enrollment tokens: Kibana > Fleet > Enrollment tokens (one per agent policy).
-#$tokenWorkstation  = ""   # Policy: Workstations
-#$tokenServer       = ""   # Policy: Servers (standalone / member server, no Hyper-V)
-#$tokenServer2012   = ""   # Policy: Servers - Windows Server 2012 (no Defend)
-#$tokenHyperV       = ""   # Policy: Hyper-V hosts
-#$tokenHyperV2012   = ""   # Policy: Hyper-V hosts - Windows Server 2012 (no Defend)
-#$tokenDC           = ""   # Policy: Domain Controllers
-#$tokenDC2012       = ""   # Policy: Domain Controllers - Windows Server 2012 (no Defend)
-#
-# Uninstall tokens: Kibana > Fleet > Uninstall tokens (one per agent policy, so each role's
-# uninstall token belongs to the same policy as its enrollment token above).
-#$uninstallTokenWorkstation = ""   # Policy: Workstations
-#$uninstallTokenServer      = ""   # Policy: Servers
-#$uninstallTokenServer2012  = ""   # Policy: Servers - Windows Server 2012
-#$uninstallTokenHyperV      = ""   # Policy: Hyper-V hosts
-#$uninstallTokenHyperV2012  = ""   # Policy: Hyper-V hosts - Windows Server 2012
-#$uninstallTokenDC          = ""   # Policy: Domain Controllers
-#$uninstallTokenDC2012      = ""   # Policy: Domain Controllers - Windows Server 2012
-###########################################################################################
 
 # check if server is 2012 and apply different policy with no defend, until they update them. 
 function check_2012 {
@@ -371,8 +460,9 @@ function check_windows_role {
         return $tokenWorkstation
     }
 }
-# uncomment here (an empty role token keeps whatever -token / $token was set to):
-#$roleToken = check_windows_role; if ($roleToken) { $token = $roleToken }
+# Applied automatically: when no -token / $token was given, use the role token set at the top.
+# An empty role token changes nothing.
+if (-not $token) { $roleToken = check_windows_role; if ($roleToken) { $token = $roleToken } }
 
 # Works out what kind of machine this is, so the tag / uninstall token functions below can share it.
 # Returns: Workstation, Server, HyperV or DomainController. A DC always reports DomainController,
@@ -410,9 +500,10 @@ function check_windows_role_tags {
         default { return "Windows, Workstation" }
     }
 }
-# uncomment here (keeps the tag(s) you set above / passed with -tag and adds the role tags to them,
-# e.g. $tag = "Client 1" on a DC becomes "Client 1,Windows,Server,Active Directory"):
-#$tag = @($tag) + (check_windows_role_tags)
+# Applied automatically: keeps the tag(s) you set above / passed with -tag and adds the role tags to
+# them, e.g. $tag = "Client 1" on a DC becomes "Client 1,Windows,Server,Active Directory".
+# Set $disableRoleTags = $true in the hard-coded section at the top to turn this off.
+if (-not $disableRoleTags) { $tag = @($tag) + (check_windows_role_tags) }
 
 # Same idea as check_windows_role, but returns the uninstall token for the policy this machine's
 # role is enrolled in. Set the tokens in the per-role variables at the top. An empty value means
@@ -433,8 +524,8 @@ function check_windows_role_uninstall_token {
         default { return $uninstallTokenWorkstation }
     }
 }
-# uncomment here (only used when no uninstall token was set above / passed with -uninstallToken):
-#if (-not $uninstallToken) { $uninstallToken = check_windows_role_uninstall_token }
+# Applied automatically: only used when no uninstall token was set above / passed with -uninstallToken.
+if (-not $uninstallToken) { $uninstallToken = check_windows_role_uninstall_token }
 
 # Normalize tags into the single comma-separated string elastic-agent expects for --tag.
 # Accepts -tag "a,b", -tag a,b (array) or "a, b" (spaces after commas); tags may contain spaces.
@@ -450,12 +541,18 @@ if ($tag) {
 }
 
 
+# Shows what this run resolved (set / not set only, never the values), so a run that ends up without
+# a token can be diagnosed from the NinjaOne log alone.
+if ($InstallOnly) {
+    Write-Output "Deployment config: role=$(get_windows_role_type), enrollment token $(if ($token) { 'set' } else { 'NOT SET' }), fleet URL $(if ($fleetURL) { 'set' } else { 'NOT SET' }), uninstall token $(if ($uninstallToken) { 'set' } else { 'not set' }), tags: $(if ($tag) { $tag } else { '<none>' })"
+}
+
 # Unattended deployment (started by the evaluation step, with no desktop to show the token form on):
 # stop here, before anything on the machine is changed, if the enrollment token or fleet URL is
 # missing. Otherwise the token form would wait forever for someone to fill it in. Run from an
 # interactive console the form is still shown.
 if ($InstallOnly -and (-not [Environment]::UserInteractive) -and (-not ($token -and $fleetURL))) {
-    Write-Output "[-] Enrollment token and/or fleet URL are not set for this machine ($(get_windows_role_type)) and the deployment is unattended, so it cannot ask for them. Set $token (or the per-role tokens, and uncomment the $roleToken line) and $fleetURL in the hard-coded section at the top of the script."
+    Write-Output "[-] Enrollment token and/or fleet URL are not set for this machine ($(get_windows_role_type)) and the deployment is unattended, so it cannot ask for them. Set `$token (or the per-role tokens, and uncomment the `$roleToken line) and `$fleetURL in the hard-coded section at the top of the script."
     exit 1
 }
 
@@ -1406,9 +1503,21 @@ function Install-ElasticAgent {
                 Remove-ExistingElasticAgent
 
                 # Insalling UNS SIEM Agent
-                $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
+                # The installer's progress spinner is captured to files and printed afterwards without the
+                # spinner, so the real error is not buried in (or cut off from) the NinjaOne output.
+                $installOutFile = Join-Path $env:TEMP "uns-elastic-install-out.txt"
+                $installErrFile = Join-Path $env:TEMP "uns-elastic-install-err.txt"
+                Remove-Item -Path $installOutFile, $installErrFile -Force -ErrorAction SilentlyContinue
+                $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $installOutFile -RedirectStandardError $installErrFile
                 $handle = $process.Handle  # Cache the process handle
                 $process.WaitForExit()
+                    Write-Output "$(Get-FormattedDate) elastic-agent install finished with exit code $($process.ExitCode). Installer output:"
+                    Format-ElasticInstallOutput $installOutFile
+                    if ((Test-Path $installErrFile) -and ((Get-Item $installErrFile).Length -gt 0)) {
+                        Write-Output "    Installer error output:"
+                        Format-ElasticInstallOutput $installErrFile
+                    }
+                    Remove-Item -Path $installOutFile, $installErrFile -Force -ErrorAction SilentlyContinue
                     # Check the exit code
                     if ($process.ExitCode -ne 0) {
                         throw "Installation failed with exit code $($process.ExitCode)"
