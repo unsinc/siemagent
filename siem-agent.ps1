@@ -233,7 +233,7 @@ if (-not $InstallOnly) {
     # 2. Deploy, once. Forward whatever was passed on the command line to the deployment process.
     if (-not $PSCommandPath) {
         Set-SiemNeedsReview "Cannot start the deployment: script path is unknown (script was not run from a file)"
-        exit
+        exit 1
     }
     $installArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-InstallOnly')
     foreach ($name in 'token', 'fleetURL', 'datapath', 'tag', 'uninstallToken') {
@@ -277,6 +277,7 @@ if (-not $InstallOnly) {
     Invoke-SiemEvaluation -Recheck
     if ($script:SiemEvalResult -ne "COMPLIANT") {
         Set-SiemNeedsReview "UNS SIEM Agent is still not compliant after deployment - manual review required"
+        exit 1   # non-zero so NinjaOne shows the action as failed, not SUCCESS
     }
     exit
 }
@@ -454,7 +455,7 @@ if ($tag) {
 # missing. Otherwise the token form would wait forever for someone to fill it in. Run from an
 # interactive console the form is still shown.
 if ($InstallOnly -and (-not [Environment]::UserInteractive) -and (-not ($token -and $fleetURL))) {
-    Write-Output "[-] Enrollment token and/or fleet URL are not set for this machine ($(get_windows_role_type)) and the deployment is unattended, so it cannot ask for them. Set them in the hard-coded section at the top of the script."
+    Write-Output "[-] Enrollment token and/or fleet URL are not set for this machine ($(get_windows_role_type)) and the deployment is unattended, so it cannot ask for them. Set $token (or the per-role tokens, and uncomment the $roleToken line) and $fleetURL in the hard-coded section at the top of the script."
     exit 1
 }
 
