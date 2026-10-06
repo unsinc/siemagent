@@ -1,5 +1,5 @@
 ##### EDIT CURRENT VERSION HERE ######
-$defaultVersion = [version]"8.19.21"
+$defaultVersion = [version]"9.5.4"
 
 try {
     $remoteVersion = (Invoke-RestMethod `

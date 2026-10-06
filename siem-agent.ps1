@@ -3,6 +3,11 @@
 UNS SIEM Agent deployment tool
 
 .DESCRIPTION
+This script first evaluates the UNS SIEM Agent (same checks, output and NinjaOne property as siem-evaluation.ps1).
+If the agent is missing, broken, unreadable or outdated it runs the deployment once, waits, evaluates once more to
+confirm, and reports NEEDS_REVIEW if the agent is still not compliant. Use -InstallOnly to skip the evaluation and
+run only the deployment below.
+
 Deployment scrip will perform following tasks:
 1. Uninstall Sysmon 32 bit from the system.
 2. Install Sysmon 64bit on the system.
@@ -12,7 +17,7 @@ Deployment scrip will perform following tasks:
 If you need help with switches, please repeat this command with -Full
 
 .NOTES
-File Name       : elastic-agent-installer.ps1
+File Name       : siem-agent.ps1
 Author          : nkolev@unsinc.com
 Prerequisite    : PowerShell >= V4,V5
 Copyright       : 2024, UNS Inc
@@ -20,23 +25,23 @@ Version         : 2024.12.11.0
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
-.\elastic-agent-installer.ps1
+.\siem-agent.ps1
 
 .EXAMPLE
 You can provide both enrollment url and token on the console. If none is provided, you will be prompted during the deployment process.
-.\elastic-agent-installer.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose
+.\siem-agent.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose
 
 .EXAMPLE
 If you want to deploy from local files, make sure script in positioned where files are. Execute with -local. In addition you can specify
-.\elastic-agent-installer.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose -local
+.\siem-agent.ps1 -token <elastic enrollment token> -fleetURL <url> -Verbose -local
 
 .EXAMPLE
 If you'd like to choose custom destination file path, please select -datapath. Ex. -datapath C:\temp
-.\elastic-agent-installer.ps1 -datapath C:\temp
+.\siem-agent.ps1 -datapath C:\temp
 
 .EXAMPLE
 If you'd like to tag the agent at enrollment, provide one or more comma-separated tags with -tag.
-.\elastic-agent-installer.ps1 -token <elastic enrollment token> -fleetURL <url> -tag "prod,workstation"
+.\siem-agent.ps1 -token <elastic enrollment token> -fleetURL <url> -tag "prod,workstation"
 
 .LINK
 https://github.com/unsinc/siemagent/blob/main/README.md
@@ -58,6 +63,9 @@ To be used with self signed fleet certificates
 
 .PARAMETER tag
 Use this switch to assign one or more comma-separated tags to the agent at enrollment, e.g. -tag "prod,workstation". If omitted, no --tag switch is passed to the installer.
+
+.PARAMETER InstallOnly
+Skips the evaluation and the post-deployment check and only runs the deployment. The evaluation step starts the deployment with this switch, so it should not normally be used directly.
 
 .PARAMETER uninstallToken
 Use this switch to provide the Elastic Agent uninstall token, required to remove an existing agent whose policy has Agent Tamper Protection enabled (Elastic Defend integration). Without it, removal of a tamper-protected agent/Endpoint installation will fail.
@@ -92,13 +100,170 @@ param
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
 	[string[]]$uninstallToken,
 
+    [Parameter(Mandatory = $false)]
+    [switch]$InstallOnly,
+
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
+
+# ======================================================================================
+# Evaluate -> deploy -> re-check
+# Without -InstallOnly this script first evaluates the UNS SIEM Agent (same checks, output and
+# NinjaOne property as siem-evaluation.ps1). Only when that reports ACTION_REQUIRED does it run the
+# deployment portion below - once - in a child PowerShell process (the deployment code calls
+# "exit" in many places, which would otherwise end this script before the re-check). After the
+# deployment it waits, evaluates one final time and, if the agent is still not compliant, reports
+# NEEDS_REVIEW. The child is started with -InstallOnly, which skips this whole block, so the
+# deployment can never start another deployment and a run can never loop.
+# ======================================================================================
+if (-not $InstallOnly) {
+
+    ##### EDIT CURRENT VERSION HERE ######
+    $defaultVersion = [version]"9.5.4"
+
+    try {
+        $remoteVersion = (Invoke-RestMethod `
+            -Uri "https://raw.githubusercontent.com/unsinc/siemagent/refs/heads/main/agent-version" `
+            -UseBasicParsing `
+            -ErrorAction Stop).Trim()
+
+        $defaultVersion = [version]$remoteVersion
+        Write-Output "Fetched current SIEM Agent version: $defaultVersion"
+    }
+    catch {
+        Write-Output "Failed to fetch current SIEM Agent version - using fallback $defaultVersion"
+    }
+
+    # The only source of the required version is the agent-version file on GitHub (the same file the
+    # deployment installs), with the hard-coded value above as the offline fallback.
+    $requiredVersion = $defaultVersion
+    #####################################
+
+    # Fixed, ASCII-only markers for NinjaOne to key its next-task condition on (output contains).
+    # Kept separate from the human-readable Write-Output lines below so rewording those later
+    # doesn't silently break the automation gate, and to avoid non-ASCII characters, which a
+    # no-BOM UTF-8 script can have mangled by Windows PowerShell 5.1's ANSI-codepage file reading.
+    $StatusActionRequired = "SIEM_AGENT_STATUS: ACTION_REQUIRED"
+    $StatusNeedsReview = "SIEM_AGENT_STATUS: NEEDS_REVIEW"
+    $StatusCompliant = "SIEM_AGENT_STATUS: COMPLIANT"
+
+    $agentBinaryPath = "$env:ProgramFiles\Elastic\Agent\elastic-agent.exe"
+
+    # Seconds to wait between the end of the deployment and the confirmation check.
+    $recheckDelaySeconds = 15
+
+    # Reports an evaluation outcome: sets the NinjaOne property and prints the status marker, and
+    # records the outcome in $script:SiemEvalResult (COMPLIANT or ACTION_REQUIRED) for the caller.
+    # On the confirmation check ($Recheck) a failing outcome is recorded silently, so the only
+    # failing status the run ever prints after a deployment is the final NEEDS_REVIEW.
+    function Set-SiemEvaluationOutcome {
+        param ($Property, $Marker, $Result, [switch]$Recheck)
+        $script:SiemEvalResult = $Result
+        if ($Recheck -and ($Result -ne "COMPLIANT")) { return }
+        Ninja-Property-Set siemAgent $Property
+        Write-Output $Marker
+    }
+
+    # Same checks and console output as siem-evaluation.ps1, except that a broken install or an
+    # unreadable version now report ACTION_REQUIRED (they get redeployed) instead of NEEDS_REVIEW.
+    function Invoke-SiemEvaluation {
+        param ([switch]$Recheck)
+
+        $script:SiemEvalResult = "ACTION_REQUIRED"
+
+        $siemAgentService = Get-Service -DisplayName 'UNS SIEM Agent' -ErrorAction SilentlyContinue
+
+        if (-not $siemAgentService) {
+            Write-Output "UNS SIEM Agent is not installed"
+            Set-SiemEvaluationOutcome "Not Installed" $StatusActionRequired "ACTION_REQUIRED" -Recheck:$Recheck
+            return
+        }
+
+        if (-not (Test-Path $agentBinaryPath)) {
+            Write-Output "UNS SIEM Agent service exists but binary is missing"
+            Set-SiemEvaluationOutcome "Broken Install" $StatusActionRequired "ACTION_REQUIRED" -Recheck:$Recheck
+            return
+        }
+
+        # Always query binary version only (daemon may be dead)
+        $versionOutput = & $agentBinaryPath version --binary-only 2>$null
+
+        if ($versionOutput -notmatch 'Binary:\s+([0-9]+\.[0-9]+\.[0-9]+)') {
+            Write-Output "UNS SIEM Agent installed, but version could not be parsed"
+            Set-SiemEvaluationOutcome "Installed (Version Unknown)" $StatusActionRequired "ACTION_REQUIRED" -Recheck:$Recheck
+            return
+        }
+
+        $installedVersion = [version]$matches[1]
+
+        # Check daemon health separately (optional but useful)
+        $daemonHealthy = $versionOutput -notmatch 'Daemon:\s+<failed'
+
+        # Version enforcement
+        if ($installedVersion -lt $requiredVersion) {
+            Write-Output "UNS SIEM Agent $installedVersion detected - update required"
+            Set-SiemEvaluationOutcome "Outdated ($installedVersion)" $StatusActionRequired "ACTION_REQUIRED" -Recheck:$Recheck
+        }
+        else {
+            Write-Output "UNS SIEM Agent is compliant"
+            Set-SiemEvaluationOutcome "$installedVersion" $StatusCompliant "COMPLIANT" -Recheck:$Recheck
+        }
+
+        # Optional health signal (non-blocking)
+        if (-not $daemonHealthy) {
+            Write-Output "WARNING: Elastic Agent daemon is not responding"
+        }
+    }
+
+    function Set-SiemNeedsReview {
+        param ($Reason)
+        Write-Output $Reason
+        Ninja-Property-Set siemAgent "Needs Review"
+        Write-Output $StatusNeedsReview
+    }
+
+    # 1. Evaluate. Nothing to do unless the agent is missing, broken, unreadable or outdated.
+    Invoke-SiemEvaluation
+    if ($script:SiemEvalResult -eq "COMPLIANT") { exit }
+
+    # 2. Deploy, once. Forward whatever was passed on the command line to the deployment process.
+    if (-not $PSCommandPath) {
+        Set-SiemNeedsReview "Cannot start the deployment: script path is unknown (script was not run from a file)"
+        exit
+    }
+    $installArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-InstallOnly')
+    foreach ($name in 'token', 'fleetURL', 'datapath', 'tag', 'uninstallToken') {
+        if ($PSBoundParameters.ContainsKey($name)) { $installArgs += "-$name"; $installArgs += ($PSBoundParameters[$name] -join ',') }
+    }
+    foreach ($name in 'local', 'insecure', 'Verbose') {
+        if ($PSBoundParameters.ContainsKey($name) -and $PSBoundParameters[$name]) { $installArgs += "-$name" }
+    }
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $powershellExe)) { $powershellExe = 'powershell.exe' }
+
+    Write-Output "Starting UNS SIEM Agent deployment (single attempt)"
+    try {
+        & $powershellExe @installArgs
+        Write-Output "UNS SIEM Agent deployment finished (exit code $LASTEXITCODE)"
+    }
+    catch {
+        Write-Output "UNS SIEM Agent deployment threw an error: $($_.Exception.Message)"
+    }
+
+    # 3. Confirm, once.
+    Write-Output "Waiting $recheckDelaySeconds seconds before confirming the deployment"
+    Start-Sleep -Seconds $recheckDelaySeconds
+    Invoke-SiemEvaluation -Recheck
+    if ($script:SiemEvalResult -ne "COMPLIANT") {
+        Set-SiemNeedsReview "UNS SIEM Agent is still not compliant after deployment - manual review required"
+    }
+    exit
+}
 
 #check if invalid parameter was passed on the console
 if($invalid_parameter)
 {
-    Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\elastic-agent-installer.ps1"
+    Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\siem-agent.ps1"
     throw
 
 }
