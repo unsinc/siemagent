@@ -224,7 +224,7 @@ function check_windows_role_tags {
     }
 }
 # uncomment here (keeps the tag(s) you set above / passed with -tag and adds the role tags to them,
-# e.g. $tag = "Green Hills" on a DC becomes "Green Hills,Windows,Server,Active Directory"):
+# e.g. $tag = "Client 1" on a DC becomes "Client 1,Windows,Server,Active Directory"):
 #$tag = @($tag) + (check_windows_role_tags)
 
 # Same idea as check_windows_role, but returns the uninstall token for the policy this machine's

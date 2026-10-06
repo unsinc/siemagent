@@ -152,6 +152,10 @@ if (-not $InstallOnly) {
     # Seconds to wait between the end of the deployment and the confirmation check.
     $recheckDelaySeconds = 15
 
+    # Longest the deployment may run before it is stopped (a hung deployment would otherwise block
+    # the confirmation check and the status report forever).
+    $deployTimeoutMinutes = 5
+
     # Reports an evaluation outcome: sets the NinjaOne property and prints the status marker, and
     # records the outcome in $script:SiemEvalResult (COMPLIANT or ACTION_REQUIRED) for the caller.
     # On the confirmation check ($Recheck) a failing outcome is recorded silently, so the only
@@ -241,10 +245,27 @@ if (-not $InstallOnly) {
     $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if (-not (Test-Path $powershellExe)) { $powershellExe = 'powershell.exe' }
 
-    Write-Output "Starting UNS SIEM Agent deployment (single attempt)"
+    # Start-Process takes one argument string, so quote every argument (a tag can contain spaces, and
+    # a trailing backslash in a path must be doubled or it would escape the closing quote).
+    $installArgString = ($installArgs | ForEach-Object {
+        '"' + (($_ -replace '(\\+)$', '$1$1') -replace '"', '\"') + '"'
+    }) -join ' '
+
+    Write-Output "Starting UNS SIEM Agent deployment (single attempt, $deployTimeoutMinutes minute limit)"
     try {
-        & $powershellExe @installArgs
-        Write-Output "UNS SIEM Agent deployment finished (exit code $LASTEXITCODE)"
+        $deployProcess = Start-Process -FilePath $powershellExe -ArgumentList $installArgString -NoNewWindow -PassThru
+        $deployHandle = $deployProcess.Handle  # Cache the process handle so ExitCode is readable after WaitForExit
+        if ($deployProcess.WaitForExit([int]($deployTimeoutMinutes * 60 * 1000))) {
+            Write-Output "UNS SIEM Agent deployment finished (exit code $($deployProcess.ExitCode))"
+        }
+        else {
+            Write-Output "UNS SIEM Agent deployment did not finish within $deployTimeoutMinutes minutes, stopping it"
+            if (Get-Command taskkill.exe -ErrorAction SilentlyContinue) {
+                & taskkill.exe /PID $deployProcess.Id /T /F *> $null
+            } else {
+                Stop-Process -Id $deployProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
     catch {
         Write-Output "UNS SIEM Agent deployment threw an error: $($_.Exception.Message)"
@@ -389,7 +410,7 @@ function check_windows_role_tags {
     }
 }
 # uncomment here (keeps the tag(s) you set above / passed with -tag and adds the role tags to them,
-# e.g. $tag = "Green Hills" on a DC becomes "Green Hills,Windows,Server,Active Directory"):
+# e.g. $tag = "Client 1" on a DC becomes "Client 1,Windows,Server,Active Directory"):
 #$tag = @($tag) + (check_windows_role_tags)
 
 # Same idea as check_windows_role, but returns the uninstall token for the policy this machine's
@@ -427,6 +448,15 @@ if ($tag) {
     $tag = $tagList -join ','
 }
 
+
+# Unattended deployment (started by the evaluation step, with no desktop to show the token form on):
+# stop here, before anything on the machine is changed, if the enrollment token or fleet URL is
+# missing. Otherwise the token form would wait forever for someone to fill it in. Run from an
+# interactive console the form is still shown.
+if ($InstallOnly -and (-not [Environment]::UserInteractive) -and (-not ($token -and $fleetURL))) {
+    Write-Output "[-] Enrollment token and/or fleet URL are not set for this machine ($(get_windows_role_type)) and the deployment is unattended, so it cannot ask for them. Set them in the hard-coded section at the top of the script."
+    exit 1
+}
 
 if (($local) -and (-not $datapath)) {
     Write-Verbose "-local was provided without -datapath. dataPath will default to current script location."
