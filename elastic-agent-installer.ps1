@@ -3,6 +3,11 @@
 UNS SIEM Agent deployment tool
 
 .DESCRIPTION
+This script first evaluates the UNS SIEM Agent (same checks, output and NinjaOne property as siem-evaluation.ps1).
+If the agent is missing, broken, unreadable or outdated it runs the deployment once, waits, evaluates once more to
+confirm, and reports NEEDS_REVIEW if the agent is still not compliant. Use -InstallOnly to skip the evaluation and
+run only the deployment below.
+
 Deployment scrip will perform following tasks:
 1. Uninstall Sysmon 32 bit from the system.
 2. Install Sysmon 64bit on the system.
@@ -16,7 +21,7 @@ File Name       : elastic-agent-installer.ps1
 Author          : nkolev@unsinc.com
 Prerequisite    : PowerShell >= V4,V5
 Copyright       : 2024, UNS Inc
-Version         : 2024.12.11.0
+Version         : 2026.10.07.0
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
@@ -59,8 +64,14 @@ To be used with self signed fleet certificates
 .PARAMETER tag
 Use this switch to assign one or more comma-separated tags to the agent at enrollment, e.g. -tag "prod,workstation". If omitted, no --tag switch is passed to the installer.
 
+.PARAMETER InstallOnly
+Skips the evaluation and the post-deployment check and only runs the deployment. The evaluation step starts the deployment with this switch, so it should not normally be used directly.
+
 .PARAMETER uninstallToken
 Use this switch to provide the Elastic Agent uninstall token, required to remove an existing agent whose policy has Agent Tamper Protection enabled (Elastic Defend integration). Without it, removal of a tamper-protected agent/Endpoint installation will fail.
+
+.PARAMETER policy
+Selects which of the role's agent policies to enrol in. Auto (default) uses the machine's role: Windows Server 2012 gets its no-Defend server policy, and a workstation gets Workstations - No Defend only when a third-party antivirus is detected. NoDefend forces the no-Defend policy of the role. Defend stops a workstation from being switched to No Defend by the detection. Other uses the one extra policy for machines that fit none of the roles. Tokens come from the per-role variables at the top of the script.
 
 #>
 [CmdletBinding()]
@@ -92,19 +103,32 @@ param
     [Parameter(Mandatory = $false, ValueFromPipeline=$true)]
 	[string[]]$uninstallToken,
 
+    # Auto, NoDefend, Defend or Other - checked in the script body (see "-policy" below), not with ValidateSet,
+    # for the same reason as -tag above.
+    [Parameter(Mandatory = $false)]
+	[string]$policy,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$InstallOnly,
+
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
 
-#check if invalid parameter was passed on the console
-if($invalid_parameter)
-{
-    Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\elastic-agent-installer.ps1"
-    throw
+######## Evaluation / deployment settings ##########
+# Offline fallback for the required agent version. The real source is agent-version on GitHub; this
+# is only used when GitHub can't be reached.
+$defaultVersion = [version]"9.5.4"
 
-}
+# Seconds to wait between the end of the deployment and the confirmation check.
+$recheckDelaySeconds = 15
+
+# Longest the deployment may run before it is stopped (a hung deployment would otherwise block
+# the confirmation check and the status report forever).
+$deployTimeoutMinutes = 10
+####################################################
 
 ######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
-#$fleetURL = ""
+$fleetURL = ""
 #$token = ""
 #$datapath = (Get-Location)
 #$local = $true
@@ -116,34 +140,341 @@ if($invalid_parameter)
 
 # --- Per-role tokens and tags, applied automatically (nothing else to uncomment) ---
 # Lets one task deploy every kind of endpoint: the script detects the machine's role and uses that
-# role's tokens below, and adds the role's tags (Windows + Workstation / Server / HyperV / Active
+# policy's tokens below (a role can have a normal and a no-Defend policy), and adds the role's tags (Windows + Workstation / Server / HyperV / Active
 # Directory) after the client tag above. A token you set or pass yourself ($token / -token,
 # $uninstallToken / -uninstallToken) always wins. Leave a role's value empty ("") if it has none.
 #$disableRoleTags = $true   # uncomment to add no role tags
 #
 # Enrollment tokens: Kibana > Fleet > Enrollment tokens (one per agent policy).
 #$tokenWorkstation  = ""   # Policy: Workstations
+#$tokenWorkstationNoDefend = ""   # Policy: Workstations - No Defend (used with -policy NoDefend)
 #$tokenServer       = ""   # Policy: Servers (standalone / member server, no Hyper-V)
 #$tokenServer2012   = ""   # Policy: Servers - Windows Server 2012 (no Defend)
 #$tokenHyperV       = ""   # Policy: Hyper-V hosts
 #$tokenHyperV2012   = ""   # Policy: Hyper-V hosts - Windows Server 2012 (no Defend)
 #$tokenDC           = ""   # Policy: Domain Controllers
 #$tokenDC2012       = ""   # Policy: Domain Controllers - Windows Server 2012 (no Defend)
+#$tokenOther        = ""   # Policy: Other - one extra policy for machines that fit none of the above (used with -policy Other)
 #
 # Uninstall tokens: Kibana > Fleet > Uninstall tokens (one per agent policy, so each role's
 # uninstall token belongs to the same policy as its enrollment token above).
 #$uninstallTokenWorkstation = ""   # Policy: Workstations
+#$uninstallTokenWorkstationNoDefend = ""   # Policy: Workstations - No Defend
 #$uninstallTokenServer      = ""   # Policy: Servers
 #$uninstallTokenServer2012  = ""   # Policy: Servers - Windows Server 2012
 #$uninstallTokenHyperV      = ""   # Policy: Hyper-V hosts
 #$uninstallTokenHyperV2012  = ""   # Policy: Hyper-V hosts - Windows Server 2012
 #$uninstallTokenDC          = ""   # Policy: Domain Controllers
 #$uninstallTokenDC2012      = ""   # Policy: Domain Controllers - Windows Server 2012
+#$uninstallTokenOther       = ""   # Policy: Other - one extra policy for machines that fit none of the above
+#
+# Services that mean a third-party antivirus / EDR is installed (wildcards allowed). A workstation
+# with one of these running is enrolled in Workstations - No Defend. Add the products your clients use.
+$thirdPartyAvServices = @(
+    "CSFalconService", "SentinelAgent", "CylanceSvc", "CbDefense", "cyserver",
+    "SAVService", "Sophos Endpoint Defense Service", "SepMasterService", "ccSvcHst", "SmcService",
+    "McShield", "mfemms", "mfevtp", "ntrtscan", "TmListen", "ekrn", "AVP*", "EPSecurityService",
+    "WRSVC", "MBAMService", "AvastSvc", "avast! Antivirus", "AVGSvc", "SBAMSvc", "PandaAetherAgent"
+)
+#
+# Choosing between a role's two policies: Windows Server 2012 is detected automatically. For
+# workstations the no-Defend policy is chosen automatically when a third-party antivirus is found;
+# -policy NoDefend forces it (also for a server that can't run Defend but isn't 2012), -policy Defend
+# stops the automatic switch, and -policy Other picks the extra policy. Default is Auto.
+#$policy = "NoDefend"
 ###########################################################################################
+
+# ======================================================================================
+# Diagnostics helpers (used by the deployment and by the final NEEDS_REVIEW report)
+# ======================================================================================
+
+# elastic-agent install redraws a spinner on every tick, which floods the NinjaOne output (and gets
+# it cut off before the real error appears). This reads the captured output and prints it without
+# the spinner: each install stage once, and JSON log lines as "[level] message".
+function Format-ElasticInstallOutput {
+    param ([string]$Path, [int]$MaxLines = 60)
+
+    if (-not (Test-Path $Path)) { return }
+    $text = Get-Content -Path $Path -Raw -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($text)) { return }
+
+    $out = New-Object System.Collections.Generic.List[string]
+    $lastStage = $null
+    foreach ($raw in ($text -split "[\r\n]+")) {
+        $line = $raw.Trim()
+        if (-not $line) { continue }
+        # spinner frame, e.g. "[  ==] Waiting For Enroll...  [5s]" or "... [1m9s]"
+        if ($line -match '^\[[ =]{4}\]\s*(.*?)\s*\[[0-9hms]+\]\s*(.*)$') {
+            $stage = $Matches[1]
+            $line = $Matches[2].Trim()
+            if ($stage -and ($stage -ne $lastStage)) { $out.Add("    $stage"); $lastStage = $stage }
+            if (-not $line) { continue }
+        }
+        # on failure the installer dumps its whole debug log; the useful part is above it
+        if ($line -match '^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(DEBUG|TRACE)\b') { continue }
+        if ($line.StartsWith('{')) {
+            try {
+                $entry = $line | ConvertFrom-Json -ErrorAction Stop
+                if ($entry.message) { $out.Add(("    [{0}] {1}" -f $entry.'log.level', $entry.message)); continue }
+            } catch { }
+        }
+        if ($line.Length -gt 400) { $line = $line.Substring(0, 400) + '...' }
+        $out.Add("    $line")
+    }
+
+    if ($out.Count -le $MaxLines) { $out } else {
+        $out | Select-Object -First $MaxLines
+        Write-Output "    ... $($out.Count - $MaxLines) more lines omitted"
+    }
+}
+
+# Prints what is known about a failed deployment: service state, whether the Fleet server answers,
+# Windows service-start errors and the agent's own recent errors. Read-only, and never throws.
+function Write-SiemDiagnostics {
+    Write-Output "---- UNS SIEM Agent diagnostics ----"
+
+    try {
+        $services = @(Get-Service -Name "Elastic Agent", "ElasticEndpoint" -ErrorAction SilentlyContinue)
+        if ($services.Count -eq 0) { Write-Output "Services: none installed (the failed install was rolled back or never started)" }
+        foreach ($service in $services) { Write-Output "Service '$($service.Name)': $($service.Status)" }
+    } catch { Write-Output "Services: could not be read ($($_.Exception.Message))" }
+
+    try {
+        $fleetUri = [uri](($fleetURL -join '').Trim())
+        $port = if ($fleetUri.Port -gt 0) { $fleetUri.Port } else { 443 }
+        $client = New-Object System.Net.Sockets.TcpClient
+        $connect = $client.BeginConnect($fleetUri.Host, $port, $null, $null)
+        if ($connect.AsyncWaitHandle.WaitOne(5000) -and $client.Connected) {
+            Write-Output "Fleet server $($fleetUri.Host):$port is reachable"
+        } else {
+            Write-Output "Fleet server $($fleetUri.Host):$port is NOT reachable (blocked by firewall/proxy, or DNS problem)"
+        }
+        $client.Close()
+    } catch { Write-Output "Fleet server: reachability check failed ($($_.Exception.Message))" }
+
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager'; StartTime = (Get-Date).AddMinutes(-30) } -ErrorAction Stop |
+            Where-Object { $_.Message -match 'Elastic|UNS SIEM' } | Select-Object -First 5)
+        foreach ($event in $events) {
+            $message = ($event.Message -replace '\s+', ' ')
+            if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+            Write-Output "Windows service log $($event.TimeCreated.ToString('HH:mm:ss')): $message"
+        }
+    } catch { }
+
+    try {
+        $crashes = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error'; StartTime = (Get-Date).AddMinutes(-30) } -ErrorAction Stop |
+            Where-Object { $_.Message -match 'elastic|endpoint-security' } | Select-Object -First 3)
+        foreach ($crash in $crashes) {
+            $message = ($crash.Message -replace '\s+', ' ')
+            if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+            Write-Output "Application crash $($crash.TimeCreated.ToString('HH:mm:ss')): $message"
+        }
+    } catch { }
+
+    try {
+        $blocks = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; Id = 1116, 1117, 1121, 1122; StartTime = (Get-Date).AddMinutes(-30) } -ErrorAction Stop |
+            Where-Object { $_.Message -match 'elastic|Elastic' } | Select-Object -First 3)
+        foreach ($block in $blocks) {
+            $message = ($block.Message -replace '\s+', ' ')
+            if ($message.Length -gt 300) { $message = $message.Substring(0, 300) }
+            Write-Output "Windows Defender $($block.TimeCreated.ToString('HH:mm:ss')): $message"
+        }
+    } catch { }
+
+    try {
+        $logFile = Get-ChildItem -Path "$env:ProgramFiles\Elastic\Agent\data\*\logs\*.ndjson" -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($logFile) {
+            $errors = @(Get-Content -Path $logFile.FullName -Tail 300 -ErrorAction SilentlyContinue | Where-Object { $_ -match '"log.level":"error"' } | Select-Object -Last 6)
+            foreach ($errorLine in $errors) {
+                try { Write-Output ("Agent log error: " + ($errorLine | ConvertFrom-Json -ErrorAction Stop).message) } catch { Write-Output "Agent log error: $errorLine" }
+            }
+        }
+    } catch { }
+
+    Write-Output "------------------------------------"
+}
+
+# ======================================================================================
+# Evaluate -> deploy -> re-check
+# Without -InstallOnly this script first evaluates the UNS SIEM Agent (same checks, output and
+# NinjaOne property as siem-evaluation.ps1). Only when that reports ACTION_REQUIRED does it run the
+# deployment portion below - once - in a child PowerShell process (the deployment code calls
+# "exit" in many places, which would otherwise end this script before the re-check). After the
+# deployment it waits, evaluates one final time and, if the agent is still not compliant, reports
+# NEEDS_REVIEW. The child is started with -InstallOnly, which skips this whole block, so the
+# deployment can never start another deployment and a run can never loop.
+# ======================================================================================
+if (-not $InstallOnly) {
+
+    # $defaultVersion (the offline fallback) is set in the settings block at the top of the script.
+    try {
+        $remoteVersion = (Invoke-RestMethod `
+            -Uri "https://raw.githubusercontent.com/unsinc/siemagent/refs/heads/main/agent-version" `
+            -UseBasicParsing `
+            -ErrorAction Stop).Trim()
+
+        $defaultVersion = [version]$remoteVersion
+        Write-Output "Fetched current SIEM Agent version: $defaultVersion"
+    }
+    catch {
+        Write-Output "Failed to fetch current SIEM Agent version - using fallback $defaultVersion"
+    }
+
+    # The only source of the required version is the agent-version file on GitHub (the same file the
+    # deployment installs), with the hard-coded value above as the offline fallback.
+    $requiredVersion = $defaultVersion
+    #####################################
+
+    # Fixed, ASCII-only markers for NinjaOne to key its next-task condition on (output contains).
+    # Kept separate from the human-readable Write-Output lines below so rewording those later
+    # doesn't silently break the automation gate, and to avoid non-ASCII characters, which a
+    # no-BOM UTF-8 script can have mangled by Windows PowerShell 5.1's ANSI-codepage file reading.
+    $StatusActionRequired = "SIEM_AGENT_STATUS: ACTION_REQUIRED"
+    $StatusNeedsReview = "SIEM_AGENT_STATUS: NEEDS_REVIEW"
+    $StatusCompliant = "SIEM_AGENT_STATUS: COMPLIANT"
+
+    $agentBinaryPath = "$env:ProgramFiles\Elastic\Agent\elastic-agent.exe"
+
+    # Reports an evaluation outcome: sets the NinjaOne property and prints the status marker, and
+    # records the outcome in $script:SiemEvalResult (COMPLIANT or ACTION_REQUIRED) for the caller.
+    # On the confirmation check ($Recheck) a failing outcome is recorded silently, so the only
+    # failing status the run ever prints after a deployment is the final NEEDS_REVIEW.
+    function Set-SiemEvaluationOutcome {
+        param ($Property, $Marker, $Result, [switch]$Recheck)
+        $script:SiemEvalResult = $Result
+        if ($Recheck -and ($Result -ne "COMPLIANT")) { return }
+        Ninja-Property-Set siemAgent $Property
+        Write-Output $Marker
+    }
+
+    # Same checks and console output as siem-evaluation.ps1, except that a broken install or an
+    # unreadable version now report ACTION_REQUIRED (they get redeployed) instead of NEEDS_REVIEW.
+    function Invoke-SiemEvaluation {
+        param ([switch]$Recheck)
+
+        $script:SiemEvalResult = "ACTION_REQUIRED"
+
+        $siemAgentService = Get-Service -DisplayName 'UNS SIEM Agent' -ErrorAction SilentlyContinue
+
+        if (-not $siemAgentService) {
+            Write-Output "UNS SIEM Agent is not installed"
+            Set-SiemEvaluationOutcome "Not Installed" $StatusActionRequired "ACTION_REQUIRED" -Recheck:$Recheck
+            return
+        }
+
+        if (-not (Test-Path $agentBinaryPath)) {
+            Write-Output "UNS SIEM Agent service exists but binary is missing"
+            Set-SiemEvaluationOutcome "Broken Install" $StatusActionRequired "ACTION_REQUIRED" -Recheck:$Recheck
+            return
+        }
+
+        # Always query binary version only (daemon may be dead)
+        $versionOutput = & $agentBinaryPath version --binary-only 2>$null
+
+        if ($versionOutput -notmatch 'Binary:\s+([0-9]+\.[0-9]+\.[0-9]+)') {
+            Write-Output "UNS SIEM Agent installed, but version could not be parsed"
+            Set-SiemEvaluationOutcome "Installed (Version Unknown)" $StatusActionRequired "ACTION_REQUIRED" -Recheck:$Recheck
+            return
+        }
+
+        $installedVersion = [version]$matches[1]
+
+        # Check daemon health separately (optional but useful)
+        $daemonHealthy = $versionOutput -notmatch 'Daemon:\s+<failed'
+
+        # Version enforcement
+        if ($installedVersion -lt $requiredVersion) {
+            Write-Output "UNS SIEM Agent $installedVersion detected - update required"
+            Set-SiemEvaluationOutcome "Outdated ($installedVersion)" $StatusActionRequired "ACTION_REQUIRED" -Recheck:$Recheck
+        }
+        else {
+            Write-Output "UNS SIEM Agent is compliant"
+            Set-SiemEvaluationOutcome "$installedVersion" $StatusCompliant "COMPLIANT" -Recheck:$Recheck
+        }
+
+        # Optional health signal (non-blocking)
+        if (-not $daemonHealthy) {
+            Write-Output "WARNING: Elastic Agent daemon is not responding"
+        }
+    }
+
+    function Set-SiemNeedsReview {
+        param ($Reason)
+        Write-Output $Reason
+        Ninja-Property-Set siemAgent "Needs Review"
+        Write-Output $StatusNeedsReview
+    }
+
+    # 1. Evaluate. Nothing to do unless the agent is missing, broken, unreadable or outdated.
+    Invoke-SiemEvaluation
+    if ($script:SiemEvalResult -eq "COMPLIANT") { exit }
+
+    # 2. Deploy, once. Forward whatever was passed on the command line to the deployment process.
+    if (-not $PSCommandPath) {
+        Set-SiemNeedsReview "Cannot start the deployment: script path is unknown (script was not run from a file)"
+        exit 1
+    }
+    $installArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-InstallOnly')
+    foreach ($name in 'token', 'fleetURL', 'datapath', 'tag', 'uninstallToken', 'policy') {
+        if ($PSBoundParameters.ContainsKey($name)) { $installArgs += "-$name"; $installArgs += ($PSBoundParameters[$name] -join ',') }
+    }
+    foreach ($name in 'local', 'insecure', 'Verbose') {
+        if ($PSBoundParameters.ContainsKey($name) -and $PSBoundParameters[$name]) { $installArgs += "-$name" }
+    }
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $powershellExe)) { $powershellExe = 'powershell.exe' }
+
+    # Start-Process takes one argument string, so quote every argument (a tag can contain spaces, and
+    # a trailing backslash in a path must be doubled or it would escape the closing quote).
+    $installArgString = ($installArgs | ForEach-Object {
+        '"' + (($_ -replace '(\\+)$', '$1$1') -replace '"', '\"') + '"'
+    }) -join ' '
+
+    Write-Output "Starting UNS SIEM Agent deployment (single attempt, $deployTimeoutMinutes minute limit)"
+    try {
+        $deployProcess = Start-Process -FilePath $powershellExe -ArgumentList $installArgString -NoNewWindow -PassThru
+        $deployHandle = $deployProcess.Handle  # Cache the process handle so ExitCode is readable after WaitForExit
+        if ($deployProcess.WaitForExit([int]($deployTimeoutMinutes * 60 * 1000))) {
+            Write-Output "UNS SIEM Agent deployment finished (exit code $($deployProcess.ExitCode))"
+        }
+        else {
+            Write-Output "UNS SIEM Agent deployment did not finish within $deployTimeoutMinutes minutes, stopping it"
+            if (Get-Command taskkill.exe -ErrorAction SilentlyContinue) {
+                & taskkill.exe /PID $deployProcess.Id /T /F *> $null
+            } else {
+                Stop-Process -Id $deployProcess.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    catch {
+        Write-Output "UNS SIEM Agent deployment threw an error: $($_.Exception.Message)"
+    }
+
+    # 3. Confirm, once.
+    Write-Output "Waiting $recheckDelaySeconds seconds before confirming the deployment"
+    Start-Sleep -Seconds $recheckDelaySeconds
+    Invoke-SiemEvaluation -Recheck
+    if ($script:SiemEvalResult -ne "COMPLIANT") {
+        Write-SiemDiagnostics
+        Set-SiemNeedsReview "UNS SIEM Agent is still not compliant after deployment - manual review required"
+        exit 1   # non-zero so NinjaOne shows the action as failed, not SUCCESS
+    }
+    exit
+}
+
+#check if invalid parameter was passed on the console
+if($invalid_parameter)
+{
+    Write-Output "[-] $($invalid_parameter) is not a valid switch. Please type Get-Help .\elastic-agent-installer.ps1"
+    throw
+
+}
 
 # check if server is 2012 and apply different policy with no defend, until they update them. 
 function check_2012 {
-    (Get-WmiObject -Class Win32_OperatingSystem).Caption -match "2012"
+    (get_windows_os_info).Caption -match "2012"
 }
 
 # agenda
@@ -154,52 +485,59 @@ function check_2012 {
 # 4 - Backup Domain Controller (BDC)
 # 5 - Primary Domain Controller (PDC)
 
-# If you need to use the script to deploy on all variery of endpoints from a single task.
-# Returns the enrollment token of the role's policy, set in the per-role variables at the top.
-function check_windows_role {
-    
-    $role = (Get-WmiObject Win32_ComputerSystem).DomainRole
-    if (($role -eq 4) -or ($role -eq 5)) {
-        if (check_2012) {
-            return $tokenDC2012
-        } else {
-            return $tokenDC
-        }
-    }
-    elseif (($role -eq 2) -or ($role -eq 3)) {
-        $hypervrole = (Get-WindowsFeature -Name Hyper-V).InstallState -eq "Installed"
-        if ($hypervrole) {
-            # if you have hyper-v policy
-            if (check_2012) {
-                return $tokenHyperV2012
-            } else {
-                return $tokenHyperV
-            }
-        } else {
-            if (check_2012) {
-                return $tokenServer2012
-            } else {
-                return $tokenServer
-            }
-        } 
-    } else {
-        return $tokenWorkstation
-    }
-}
-# Applied automatically: when no -token / $token was given, use the role token set at the top.
-# An empty role token changes nothing.
-if (-not $token) { $roleToken = check_windows_role; if ($roleToken) { $token = $roleToken } }
+# Reads every signal that says whether this is a server or a workstation. DomainRole alone is not
+# reliable enough: if the WMI query for it fails (it can on a busy or freshly booted VM) it comes
+# back empty, which used to be read as "workstation". The OS's own product type is the authority,
+# with the edition name and the registry InstallationType as backups.
+function get_windows_os_info {
 
-# Works out what kind of machine this is, so the tag / uninstall token functions below can share it.
-# Returns: Workstation, Server, HyperV or DomainController. A DC always reports DomainController,
-# even when it also happens to have the Hyper-V role installed.
+    if ($script:osInfo) { return $script:osInfo }
+    $info = @{ ProductType = $null; InstallationType = $null; Caption = $null; DomainRole = $null }
+    try {
+        $os = Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop
+        if ($os.ProductType) { $info.ProductType = [int]$os.ProductType }   # 1 workstation, 2 domain controller, 3 server
+        $info.Caption = $os.Caption
+    } catch { }
+    try {
+        $version = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+        $info.InstallationType = $version.InstallationType   # Client, Server, Server Core
+        if (-not $info.Caption) { $info.Caption = $version.ProductName }   # backup when the WMI query failed
+    } catch { }
+    try {
+        $domainRole = (Get-WmiObject -Class Win32_ComputerSystem -ErrorAction Stop).DomainRole
+        if ($null -ne $domainRole) { $info.DomainRole = [int]$domainRole }
+    } catch { }
+    $script:osInfo = $info
+    return $info
+}
+
+# Works out what kind of machine this is, so the policy / tag functions below can share it.
+# Returns: Workstation, Server, HyperV, DomainController or Unknown (no signal could be read at all).
+# Server vs workstation is decided by the OS product type first, then the registry InstallationType,
+# the edition name and DomainRole, so a server whose DomainRole could not be read is still a server.
+# A DC always reports DomainController, even when it also has the Hyper-V role installed.
+# The signals and the verdict are kept in $script:roleEvidence for the deployment log.
 function get_windows_role_type {
 
-    $role = (Get-WmiObject Win32_ComputerSystem).DomainRole
-    if (($role -eq 4) -or ($role -eq 5)) {
-        return "DomainController"
+    if ($script:roleType) { return $script:roleType }
+
+    $info = get_windows_os_info
+    $isServer = $null
+    if ($info.ProductType)                  { $isServer = ($info.ProductType -ne 1) }
+    elseif ($info.InstallationType)         { $isServer = ($info.InstallationType -match 'Server') }
+    elseif ($info.Caption)                  { $isServer = ($info.Caption -match 'Server') }
+    elseif ($null -ne $info.DomainRole)     { $isServer = ($info.DomainRole -ge 2) }
+
+    if ($null -eq $isServer) {
+        $type = "Unknown"
     }
-    elseif (($role -eq 2) -or ($role -eq 3)) {
+    elseif (-not $isServer) {
+        $type = "Workstation"
+    }
+    elseif (($info.ProductType -eq 2) -or ($info.DomainRole -eq 4) -or ($info.DomainRole -eq 5)) {
+        $type = "DomainController"
+    }
+    else {
         # Get-WindowsFeature only exists on Windows Server (and needs ServerManager on 2008 R2),
         # so a failure here just means "not a Hyper-V host" rather than stopping the install.
         try {
@@ -207,22 +545,133 @@ function get_windows_role_type {
         } catch {
             $hypervrole = $false
         }
-        if ($hypervrole) {
-            return "HyperV"
-        }
-        return "Server"
+        if ($hypervrole) { $type = "HyperV" } else { $type = "Server" }
     }
-    return "Workstation"
+
+    $serverByRole = ($null -ne $info.DomainRole) -and ($info.DomainRole -ge 2)
+    $note = ""
+    if (($null -ne $isServer) -and ($null -ne $info.DomainRole) -and ($isServer -ne $serverByRole)) {
+        $note = " - DomainRole disagrees with the OS, trusting the OS"
+    }
+    $script:roleEvidence = "ProductType=$($info.ProductType), InstallationType=$($info.InstallationType), DomainRole=$($info.DomainRole), OS='$($info.Caption)'$note"
+    $script:roleType = $type
+    return $type
 }
 
-# Same idea as check_windows_role, but returns the agent tags for this machine's role instead of
-# an enrollment token. Edit the tag lists below to change what each role gets.
+# -policy: Auto (default) picks the policy from the machine's role: servers running Windows Server
+# 2012 get the 2012 (no Defend) policy, workstations get Workstations - No Defend only when a
+# third-party antivirus is found (see get_thirdparty_av) and Workstations otherwise. NoDefend forces
+# the no-Defend policy of the role whatever is detected. Defend stops a workstation from being moved to
+# No Defend by the detection (use it if the detection is wrong); it changes nothing for servers.
+# Other forces the one extra policy for machines that fit none of the roles. Anything else is rejected.
+$policyChoice = ($policy -join '').Trim()
+if (-not $policyChoice) { $policyChoice = "Auto" }
+if ($policyChoice -notin "Auto", "NoDefend", "Defend", "Other") {
+    Write-Output "[-] Invalid -policy value '$policyChoice'. Use Auto, NoDefend, Defend or Other."
+    throw "Invalid policy value"
+}
+
+# Decides whether a workstation runs a third-party antivirus / EDR (anything other than Microsoft
+# Defender), which is when the no-Defend workstation policy is needed. Three independent checks, any
+# one of them is enough, so a failing query doesn't hide a product:
+#   1. Windows Security Center (root\SecurityCenter2): products other than Defender that are switched on.
+#      A registered but switched-off product is ignored, since Security Center keeps stale entries after
+#      an uninstall.
+#   2. Defender's own running mode: Passive / EDR Block means something else is the main antivirus.
+#   3. Known antivirus services (list at the top) that are running.
+# Elastic's own registration is excluded: Elastic Defend registers in Security Center and puts Defender
+# in passive mode, so on a machine that already has Elastic Endpoint installed, a passive Defender is
+# not evidence of a third-party product (and the Elastic entry is skipped), otherwise a re-run would
+# flip a machine into the wrong policy. The evidence is kept in $script:avEvidence for the log.
+function get_thirdparty_av {
+
+    $found = New-Object System.Collections.Generic.List[string]
+    $notes = New-Object System.Collections.Generic.List[string]
+    $endpointInstalled = [bool](Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue)
+
+    $products = $null
+    try {
+        $products = @(Get-WmiObject -Namespace "root\SecurityCenter2" -Class AntiVirusProduct -ErrorAction Stop)
+    } catch {
+        try {
+            $products = @(Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName AntiVirusProduct -ErrorAction Stop)
+        } catch {
+            $notes.Add("Security Center unavailable")
+        }
+    }
+    foreach ($product in $products) {
+        $name = [string]$product.displayName
+        if ($name -match 'Windows Defender|Microsoft Defender|Elastic|Endgame') { continue }
+        # productState bits 12-15: 1 = on, 2 = snoozed, 0 = off
+        $state = 0
+        try { $state = [int]$product.productState } catch { }
+        if (($state -band 0xF000) -eq 0x1000) { $found.Add("Security Center: $name (on)") }
+        else { $notes.Add("Security Center: $name registered but not on, ignored") }
+    }
+
+    try {
+        $mode = [string](Get-MpComputerStatus -ErrorAction Stop).AMRunningMode
+        if ($mode -match 'Passive|EDR Block') {
+            if ($endpointInstalled) { $notes.Add("Defender is in '$mode' mode, but Elastic Endpoint is installed so that proves nothing") }
+            else { $found.Add("Defender running mode: $mode") }
+        }
+    } catch {
+        $notes.Add("Defender mode unavailable")
+    }
+
+    try {
+        $running = @(Get-Service -Name $thirdPartyAvServices -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq "Running" })
+        foreach ($service in $running) { $found.Add("AV service running: $($service.Name)") }
+    } catch { }
+
+    $script:avEvidence = (@($found) + @($notes)) -join "; "
+    if (-not $script:avEvidence) { $script:avEvidence = "no third-party antivirus found" }
+    return ($found.Count -gt 0)
+}
+
+# Returns the policy this machine belongs to as a name suffix, matching the per-role variables at
+# the top ($token<name> / $uninstallToken<name>): Workstation, WorkstationNoDefend, Server,
+# Server2012, HyperV, HyperV2012, DC, DC2012 or Other.
+function get_policy_name {
+
+    if ($policyChoice -eq "Other") { return "Other" }
+    $noDefend = ($policyChoice -eq "NoDefend")
+
+    $type = get_windows_role_type
+    if ($type -eq "Unknown") { return "Other" }
+    if ($type -eq "Workstation") {
+        if ($noDefend) { $script:avEvidence = "-policy NoDefend given"; return "WorkstationNoDefend" }
+        if ($policyChoice -eq "Defend") { $script:avEvidence = "-policy Defend given, detection skipped"; return "Workstation" }
+        if (get_thirdparty_av) { return "WorkstationNoDefend" }
+        return "Workstation"
+    }
+
+    if ($type -eq "DomainController") { $name = "DC" } else { $name = $type }
+    if ($noDefend -or (check_2012)) { return "${name}2012" }
+    return $name
+}
+$policyName = get_policy_name
+
+# Reads the per-role variable for this machine's policy, e.g. "token" -> $tokenServer2012. Returns
+# $null when it is not set. It never falls back to another policy's value: a machine that must not
+# get Elastic Defend would otherwise be enrolled in the Defend policy.
+function get_policy_value {
+    param ([string]$Prefix)
+    Get-Variable -Name ($Prefix + $policyName) -ValueOnly -ErrorAction SilentlyContinue
+}
+
+# Applied automatically: when no -token / $token was given, use the enrollment token of this
+# machine's policy set at the top. An empty value changes nothing.
+if (-not $token) { $roleToken = get_policy_value "token"; if ($roleToken) { $token = $roleToken } }
+
+# Returns the agent tags for this machine's role. Edit the tag lists below to change what each role gets.
 function check_windows_role_tags {
 
     switch (get_windows_role_type) {
         "DomainController" { return "Windows, Server, Active Directory" }
         "HyperV"           { return "Windows, Server, HyperV" }
         "Server"           { return "Windows, Server" }
+        "Unknown"          { return "Windows" }
         default { return "Windows, Workstation" }
     }
 }
@@ -231,27 +680,10 @@ function check_windows_role_tags {
 # Set $disableRoleTags = $true in the hard-coded section at the top to turn this off.
 if (-not $disableRoleTags) { $tag = @($tag) + (check_windows_role_tags) }
 
-# Same idea as check_windows_role, but returns the uninstall token for the policy this machine's
-# role is enrolled in. Set the tokens in the per-role variables at the top. An empty value means
-# "no token supplied".
-function check_windows_role_uninstall_token {
-
-    switch (get_windows_role_type) {
-        "DomainController" {
-            if (check_2012) { return $uninstallTokenDC2012 } else { return $uninstallTokenDC }
-        }
-        "HyperV" {
-            # if you have hyper-v policy
-            if (check_2012) { return $uninstallTokenHyperV2012 } else { return $uninstallTokenHyperV }
-        }
-        "Server" {
-            if (check_2012) { return $uninstallTokenServer2012 } else { return $uninstallTokenServer }
-        }
-        default { return $uninstallTokenWorkstation }
-    }
-}
 # Applied automatically: only used when no uninstall token was set above / passed with -uninstallToken.
-if (-not $uninstallToken) { $uninstallToken = check_windows_role_uninstall_token }
+# It is the token of the policy the machine is enrolled in today, which is the same policy as the
+# enrollment token above - so the same -policy applies here.
+if (-not $uninstallToken) { $uninstallToken = get_policy_value "uninstallToken" }
 
 # Normalize tags into the single comma-separated string elastic-agent expects for --tag.
 # Accepts -tag "a,b", -tag a,b (array) or "a, b" (spaces after commas); tags may contain spaces.
@@ -266,6 +698,21 @@ if ($tag) {
     $tag = $tagList -join ','
 }
 
+
+# Shows what this run resolved (set / not set only, never the values), so a run that ends up without
+# a token can be diagnosed from the NinjaOne log alone.
+if ($InstallOnly) {
+    Write-Output "Deployment config: role=$(get_windows_role_type) [$script:roleEvidence], policy=$policyName (-policy $policyChoice$(if ($script:avEvidence) { ", AV: $script:avEvidence" })), enrollment token $(if ($token) { 'set' } else { 'NOT SET' }), fleet URL $(if ($fleetURL) { 'set' } else { 'NOT SET' }), uninstall token $(if ($uninstallToken) { 'set' } else { 'not set' }), tags: $(if ($tag) { $tag } else { '<none>' })"
+}
+
+# Unattended deployment (started by the evaluation step, with no desktop to show the token form on):
+# stop here, before anything on the machine is changed, if the enrollment token or fleet URL is
+# missing. Otherwise the token form would wait forever for someone to fill it in. Run from an
+# interactive console the form is still shown.
+if ($InstallOnly -and (-not [Environment]::UserInteractive) -and (-not ($token -and $fleetURL))) {
+    Write-Output "[-] Enrollment token and/or fleet URL are not set for this machine ($(get_windows_role_type), policy $policyName) and the deployment is unattended, so it cannot ask for them. Set `$token$policyName (or `$token) and `$fleetURL in the hard-coded section at the top of the script."
+    exit 1
+}
 
 if (($local) -and (-not $datapath)) {
     Write-Verbose "-local was provided without -datapath. dataPath will default to current script location."
@@ -1214,9 +1661,21 @@ function Install-ElasticAgent {
                 Remove-ExistingElasticAgent
 
                 # Insalling UNS SIEM Agent
-                $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru
+                # The installer's progress spinner is captured to files and printed afterwards without the
+                # spinner, so the real error is not buried in (or cut off from) the NinjaOne output.
+                $installOutFile = Join-Path $env:TEMP "uns-elastic-install-out.txt"
+                $installErrFile = Join-Path $env:TEMP "uns-elastic-install-err.txt"
+                Remove-Item -Path $installOutFile, $installErrFile -Force -ErrorAction SilentlyContinue
+                $process = Start-Process -FilePath "$agentinstallPath\elastic-agent.exe" -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardOutput $installOutFile -RedirectStandardError $installErrFile
                 $handle = $process.Handle  # Cache the process handle
                 $process.WaitForExit()
+                    Write-Output "$(Get-FormattedDate) elastic-agent install finished with exit code $($process.ExitCode). Installer output:"
+                    Format-ElasticInstallOutput $installOutFile
+                    if ((Test-Path $installErrFile) -and ((Get-Item $installErrFile).Length -gt 0)) {
+                        Write-Output "    Installer error output:"
+                        Format-ElasticInstallOutput $installErrFile
+                    }
+                    Remove-Item -Path $installOutFile, $installErrFile -Force -ErrorAction SilentlyContinue
                     # Check the exit code
                     if ($process.ExitCode -ne 0) {
                         throw "Installation failed with exit code $($process.ExitCode)"
