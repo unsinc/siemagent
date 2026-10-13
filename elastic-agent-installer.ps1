@@ -123,7 +123,7 @@ param
 ######## Evaluation / deployment settings ##########
 # Offline fallback for the required agent version. The real source is agent-version on GitHub; this
 # is only used when GitHub can't be reached.
-$defaultVersion = [version]"9.5.5"
+$defaultVersion = [version]"9.5.4"
 
 # Seconds to wait between the end of the deployment and the confirmation check.
 $recheckDelaySeconds = 15
@@ -161,11 +161,11 @@ $defaultAgentGrpcPort = 6789
 #$tokenWorkstation  = ""   # Policy: Workstations
 #$tokenWorkstationNoDefend = ""   # Policy: Workstations - No Defend (used with -policy NoDefend)
 #$tokenServer       = ""   # Policy: Servers (standalone / member server, no Hyper-V)
-#$tokenServer2012   = ""   # Policy: Servers - Windows Server 2012 (no Defend)
+#$tokenServerNoDefend   = ""   # Policy: Servers - No Defend (Windows Server 2012, or any server that cannot run Defend)
 #$tokenHyperV       = ""   # Policy: Hyper-V hosts
-#$tokenHyperV2012   = ""   # Policy: Hyper-V hosts - Windows Server 2012 (no Defend)
+#$tokenHyperVNoDefend   = ""   # Policy: Hyper-V hosts - No Defend
 #$tokenDC           = ""   # Policy: Domain Controllers
-#$tokenDC2012       = ""   # Policy: Domain Controllers - Windows Server 2012 (no Defend)
+#$tokenDCNoDefend       = ""   # Policy: Domain Controllers - No Defend
 #$tokenOther        = ""   # Policy: Other - one extra policy for machines that fit none of the above (used with -policy Other)
 #
 # Uninstall tokens: Kibana > Fleet > Uninstall tokens (one per agent policy, so each role's
@@ -173,11 +173,11 @@ $defaultAgentGrpcPort = 6789
 #$uninstallTokenWorkstation = ""   # Policy: Workstations
 #$uninstallTokenWorkstationNoDefend = ""   # Policy: Workstations - No Defend
 #$uninstallTokenServer      = ""   # Policy: Servers
-#$uninstallTokenServer2012  = ""   # Policy: Servers - Windows Server 2012
+#$uninstallTokenServerNoDefend  = ""   # Policy: Servers - No Defend
 #$uninstallTokenHyperV      = ""   # Policy: Hyper-V hosts
-#$uninstallTokenHyperV2012  = ""   # Policy: Hyper-V hosts - Windows Server 2012
+#$uninstallTokenHyperVNoDefend  = ""   # Policy: Hyper-V hosts - No Defend
 #$uninstallTokenDC          = ""   # Policy: Domain Controllers
-#$uninstallTokenDC2012      = ""   # Policy: Domain Controllers - Windows Server 2012
+#$uninstallTokenDCNoDefend      = ""   # Policy: Domain Controllers - No Defend
 #$uninstallTokenOther       = ""   # Policy: Other - one extra policy for machines that fit none of the above
 #
 # Services that mean a third-party antivirus / EDR is installed (wildcards allowed). A workstation
@@ -256,7 +256,7 @@ foreach ($switchName in 'local', 'insecure', 'disableRoleTags', 'uninstallOnly')
     }
 }
 
-foreach ($roleName in 'Workstation', 'WorkstationNoDefend', 'Server', 'Server2012', 'HyperV', 'HyperV2012', 'DC', 'DC2012', 'Other') {
+foreach ($roleName in 'Workstation', 'WorkstationNoDefend', 'Server', 'ServerNoDefend', 'HyperV', 'HyperVNoDefend', 'DC', 'DCNoDefend', 'Other') {
     foreach ($prefix in 'token', 'uninstallToken') {
         $roleVariable = "$prefix$roleName"
         $envValue = Get-EnvSetting $roleVariable
@@ -277,7 +277,7 @@ foreach ($roleName in 'Workstation', 'WorkstationNoDefend', 'Server', 'Server201
 # not deleted, because this script did not put it there.
 function Clear-ElasticEnvSettings {
     $settingNames = @('token', 'fleetURL', 'datapath', 'tag', 'uninstallToken', 'policy', 'local', 'insecure', 'disableRoleTags', 'uninstallOnly')
-    foreach ($role in 'Workstation', 'WorkstationNoDefend', 'Server', 'Server2012', 'HyperV', 'HyperV2012', 'DC', 'DC2012', 'Other') {
+    foreach ($role in 'Workstation', 'WorkstationNoDefend', 'Server', 'ServerNoDefend', 'HyperV', 'HyperVNoDefend', 'DC', 'DCNoDefend', 'Other') {
         $settingNames += "token$role"
         $settingNames += "uninstallToken$role"
     }
@@ -851,7 +851,7 @@ function get_thirdparty_av {
 
 # Returns the policy this machine belongs to as a name suffix, matching the per-role variables at
 # the top ($token<name> / $uninstallToken<name>): Workstation, WorkstationNoDefend, Server,
-# Server2012, HyperV, HyperV2012, DC, DC2012 or Other.
+# ServerNoDefend, HyperV, HyperVNoDefend, DC, DCNoDefend or Other.
 function get_policy_name {
 
     if ($policyChoice -eq "Other") { return "Other" }
@@ -867,12 +867,12 @@ function get_policy_name {
     }
 
     if ($type -eq "DomainController") { $name = "DC" } else { $name = $type }
-    if ($noDefend -or (check_2012)) { return "${name}2012" }
+    if ($noDefend -or (check_2012)) { return "${name}NoDefend" }
     return $name
 }
 $policyName = get_policy_name
 
-# Reads the per-role variable for this machine's policy, e.g. "token" -> $tokenServer2012. Returns
+# Reads the per-role variable for this machine's policy, e.g. "token" -> $tokenServerNoDefend. Returns
 # $null when it is not set. It never falls back to another policy's value: a machine that must not
 # get Elastic Defend would otherwise be enrolled in the Defend policy.
 function get_policy_value {
