@@ -67,6 +67,9 @@ Use this switch to assign one or more comma-separated tags to the agent at enrol
 .PARAMETER InstallOnly
 Skips the evaluation and the post-deployment check and only runs the deployment. The evaluation step starts the deployment with this switch, so it should not normally be used directly.
 
+.PARAMETER UninstallOnly
+Removes the UNS SIEM Agent (and Elastic Endpoint, if present) and installs nothing: no evaluation, no download, no Sysmon or Perch changes. Uses the uninstall token passed with -uninstallToken, or the one for this machine's policy (elasticUninstallToken<Role> variables), which an agent with Agent Tamper Protection needs. NinjaOne variable: elasticUninstallOnly.
+
 .PARAMETER uninstallToken
 Use this switch to provide the Elastic Agent uninstall token, required to remove an existing agent whose policy has Agent Tamper Protection enabled (Elastic Defend integration). Without it, removal of a tamper-protected agent/Endpoint installation will fail.
 
@@ -111,6 +114,9 @@ param
     [Parameter(Mandatory = $false)]
     [switch]$InstallOnly,
 
+    [Parameter(Mandatory = $false)]
+    [switch]$UninstallOnly,
+
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
 
@@ -134,7 +140,7 @@ $defaultAgentGrpcPort = 6789
 ####################################################
 
 ######## Uncomment if you want to have hard-coded fleeturl and token variables ##########
-$fleetURL = ""
+#$fleetURL = ""
 #$token = ""
 #$datapath = (Get-Location)
 #$local = $true
@@ -240,7 +246,7 @@ foreach ($settingName in 'token', 'fleetURL', 'datapath', 'tag', 'uninstallToken
     }
 }
 
-foreach ($switchName in 'local', 'insecure', 'disableRoleTags') {
+foreach ($switchName in 'local', 'insecure', 'disableRoleTags', 'uninstallOnly') {
     if ($PSBoundParameters.ContainsKey($switchName)) { $script:SettingSources.Add("$switchName=parameter"); continue }
     $envValue = Get-EnvSetting $switchName
     if ($null -ne $envValue) {
@@ -270,7 +276,7 @@ foreach ($roleName in 'Workstation', 'WorkstationNoDefend', 'Server', 'Server201
 # for the log: if a value turns out to be stored permanently (User or Machine scope), that is reported,
 # not deleted, because this script did not put it there.
 function Clear-ElasticEnvSettings {
-    $settingNames = @('token', 'fleetURL', 'datapath', 'tag', 'uninstallToken', 'policy', 'local', 'insecure', 'disableRoleTags')
+    $settingNames = @('token', 'fleetURL', 'datapath', 'tag', 'uninstallToken', 'policy', 'local', 'insecure', 'disableRoleTags', 'uninstallOnly')
     foreach ($role in 'Workstation', 'WorkstationNoDefend', 'Server', 'Server2012', 'HyperV', 'HyperV2012', 'DC', 'DC2012', 'Other') {
         $settingNames += "token$role"
         $settingNames += "uninstallToken$role"
@@ -409,6 +415,7 @@ function Write-SiemDiagnostics {
     } catch { }
 
     try {
+        if (-not (($fleetURL -join '').Trim())) { throw "no fleet URL is set (normal for -UninstallOnly)" }
         $fleetUri = [uri](($fleetURL -join '').Trim())
         $port = if ($fleetUri.Port -gt 0) { $fleetUri.Port } else { 443 }
         $client = New-Object System.Net.Sockets.TcpClient
@@ -592,8 +599,11 @@ if (-not $InstallOnly) {
     }
 
     # 1. Evaluate. Nothing to do unless the agent is missing, broken, unreadable or outdated.
-    Invoke-SiemEvaluation
-    if ($script:SiemEvalResult -eq "COMPLIANT") { Clear-ElasticEnvSettings; exit }
+    # -UninstallOnly skips the evaluation: whatever is installed is removed, compliant or not.
+    if (-not $UninstallOnly) {
+        Invoke-SiemEvaluation
+        if ($script:SiemEvalResult -eq "COMPLIANT") { Clear-ElasticEnvSettings; exit }
+    }
 
     # 2. Deploy, once. Forward whatever was passed on the command line to the deployment process.
     if (-not $PSCommandPath) {
@@ -605,7 +615,7 @@ if (-not $InstallOnly) {
     foreach ($name in 'token', 'fleetURL', 'datapath', 'tag', 'uninstallToken', 'policy') {
         if ($PSBoundParameters.ContainsKey($name)) { $installArgs += "-$name"; $installArgs += ($PSBoundParameters[$name] -join ',') }
     }
-    foreach ($name in 'local', 'insecure', 'Verbose') {
+    foreach ($name in 'local', 'insecure', 'UninstallOnly', 'Verbose') {
         if ($PSBoundParameters.ContainsKey($name) -and $PSBoundParameters[$name]) { $installArgs += "-$name" }
     }
     $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -617,12 +627,17 @@ if (-not $InstallOnly) {
         '"' + (($_ -replace '(\\+)$', '$1$1') -replace '"', '\"') + '"'
     }) -join ' '
 
-    Write-Output "Starting UNS SIEM Agent deployment (single attempt, $deployTimeoutMinutes minute limit)"
+    if ($UninstallOnly) {
+        Write-Output "UNINSTALL ONLY: removing the UNS SIEM Agent and Elastic Endpoint, nothing will be installed ($deployTimeoutMinutes minute limit)"
+    } else {
+        Write-Output "Starting UNS SIEM Agent deployment (single attempt, $deployTimeoutMinutes minute limit)"
+    }
     try {
         $deployProcess = Start-Process -FilePath $powershellExe -ArgumentList $installArgString -NoNewWindow -PassThru
         $deployHandle = $deployProcess.Handle  # Cache the process handle so ExitCode is readable after WaitForExit
         if ($deployProcess.WaitForExit([int]($deployTimeoutMinutes * 60 * 1000))) {
-            Write-Output "UNS SIEM Agent deployment finished (exit code $($deployProcess.ExitCode))"
+            $childExitCode = $deployProcess.ExitCode
+            Write-Output "UNS SIEM Agent deployment finished (exit code $childExitCode)"
         }
         else {
             Write-Output "UNS SIEM Agent deployment did not finish within $deployTimeoutMinutes minutes, stopping it"
@@ -635,6 +650,24 @@ if (-not $InstallOnly) {
     }
     catch {
         Write-Output "UNS SIEM Agent deployment threw an error: $($_.Exception.Message)"
+    }
+
+    # 3a. -UninstallOnly: success means no agent or Endpoint service is left. No re-evaluation, and the
+    # siemAgent property is left alone (setting it to "Not Installed" could trigger a reinstall task).
+    if ($UninstallOnly) {
+        $remaining = @(Get-Service -Name "Elastic Agent", "ElasticEndpoint" -ErrorAction SilentlyContinue)
+        if (($remaining.Count -eq 0) -and ($childExitCode -eq 0)) {
+            Write-Output "UNS SIEM Agent and Elastic Endpoint are removed from this machine"
+            Write-Output "SIEM_AGENT_STATUS: UNINSTALLED"
+            Clear-ElasticEnvSettings
+            exit
+        }
+        if ($remaining.Count -gt 0) { Write-Output "Still installed after the uninstall: $(($remaining | ForEach-Object { $_.Name }) -join ', ')" }
+        else { Write-Output "No agent service is left, but the uninstall process did not complete cleanly (exit code: $(if ($null -eq $childExitCode) { 'none, timed out' } else { $childExitCode }))" }
+        Write-SiemDiagnostics
+        Set-SiemNeedsReview "UNS SIEM Agent could not be removed - manual review required (an agent with Tamper Protection needs its uninstall token)"
+        Clear-ElasticEnvSettings
+        exit 1
     }
 
     # 3. Confirm, once.
@@ -891,13 +924,16 @@ if ($tag) {
 if ($InstallOnly) {
     Write-Output "Deployment config: role=$(get_windows_role_type) [$script:roleEvidence], policy=$policyName (-policy $policyChoice$(if ($script:avEvidence) { ", AV: $script:avEvidence" })), enrollment token $(if ($token) { 'set' } else { 'NOT SET' }), fleet URL $(if ($fleetURL) { 'set' } else { 'NOT SET' }), uninstall token $(if ($uninstallToken) { 'set' } else { 'not set' }), tags: $(if ($tag) { $tag } else { '<none>' })"
     Write-Output "Settings source: $(if ($script:SettingSources.Count -gt 0) { $script:SettingSources -join ', ' } else { '<none set>' })"
+    if ($UninstallOnly) {
+        Write-Output "UNINSTALL ONLY mode: nothing will be downloaded or installed. Uninstall token for this machine (policy $policyName): $(if ($uninstallToken) { 'set' } else { 'NOT SET - an agent with Agent Tamper Protection cannot be removed without it' })"
+    }
 }
 
 # Unattended deployment (started by the evaluation step, with no desktop to show the token form on):
 # stop here, before anything on the machine is changed, if the enrollment token or fleet URL is
 # missing. Otherwise the token form would wait forever for someone to fill it in. Run from an
 # interactive console the form is still shown.
-if ($InstallOnly -and (-not [Environment]::UserInteractive) -and (-not ($token -and $fleetURL))) {
+if ($InstallOnly -and (-not $UninstallOnly) -and (-not [Environment]::UserInteractive) -and (-not ($token -and $fleetURL))) {
     Write-Output "[-] Enrollment token and/or fleet URL are not set for this machine ($(get_windows_role_type), policy $policyName) and the deployment is unattended, so it cannot ask for them. Set $(Get-EnvSettingName "token$policyName") (or $(Get-EnvSettingName 'token')) and $(Get-EnvSettingName 'fleetURL') as NinjaOne script variables, or `$token$policyName / `$fleetURL in the hard-coded section at the top of the script."
     Clear-ElasticEnvSettings
     exit 1
@@ -939,7 +975,7 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     # Relaunch the script with elevated privileges
     Write-Output "$(Get-FormattedDate) Administrator privileges required. Please restart as Administrator"
     Start-Sleep 5
-    exit
+    exit 1
 }
 
 ## setttings ##
@@ -1069,8 +1105,8 @@ Write-Output "$(Get-FormattedDate) Download Folder is: $downloadFolder"
 
 #Default Install Directory
 $InstallDIR = $env:programfiles + '\UNS SIEM Agent'
-if (Test-Path $InstallDIR) {
-    "Exist" | Out-Null
+if ($UninstallOnly -or (Test-Path $InstallDIR)) {
+    "Exist" | Out-Null   # -UninstallOnly must not create anything
 } else {
     try {
 
@@ -1165,7 +1201,7 @@ foreach ($i in 0..($agentPaths.Length - 1)) {
     Write-Verbose "$(Get-FormattedDate) Agent Path $i : $($agentPaths[$i])" -ErrorAction SilentlyContinue
 }
 
-Write-Output "$(Get-FormattedDate) Downloading required deployment files, please be patient."
+if (-not $UninstallOnly) { Write-Output "$(Get-FormattedDate) Downloading required deployment files, please be patient." }
 # Function to download files from the internet
 function Get-UNSFiles($downloadUrl, $installPath) {
     # A file left behind (or still locked) by an earlier run makes every download method below fail
@@ -1229,7 +1265,10 @@ function Get-UNSFiles($downloadUrl, $installPath) {
 }
 
 # verify if $local
-if ($local) {
+if ($UninstallOnly) {
+    Write-Verbose "$(Get-FormattedDate) -UninstallOnly: no files are downloaded"
+}
+elseif ($local) {
     Write-Verbose "$(Get-FormattedDate) `$local switch provided. Looking for files in $($datapath.TrimEnd('UNSFiles\'))"
     # Get all files in the directory
     $mfiles = Get-ChildItem -Path $($datapath.TrimEnd('UNSFiles\')) -File -ErrorAction SilentlyContinue
@@ -1247,7 +1286,7 @@ else {
 # Create necessary directories
 
 try {
-    $directories = @("sysmon", "configs")
+    $directories = if ($UninstallOnly) { @() } else { @("sysmon", "configs") }
 
     foreach ($dir in $directories) {
         $dirPath = Join-Path -Path $InstallDIR -ChildPath $dir
@@ -2305,7 +2344,17 @@ function Install-ElasticAgent {
 ### ACTION ###
 $script:deployExitCode = 0
 try {
-    
+  if ($UninstallOnly) {
+    # Cleanup only: remove the agent and Endpoint (supported uninstall with the uninstall token, then the
+    # manual fallback and file cleanup). Sysmon and Perch are left exactly as they are, and nothing is installed.
+    Write-Output "$(Get-FormattedDate) UNINSTALL ONLY: removing the UNS SIEM Agent and Elastic Endpoint"
+    if (-not ($uninstallToken -join '').Trim()) {
+        Write-Output "$(Get-FormattedDate) No uninstall token available for this machine (policy $policyName). An agent without Agent Tamper Protection can still be removed; a protected one will refuse."
+    }
+    Remove-ExistingElasticAgent
+    Write-Output "$(Get-FormattedDate) Uninstall finished"
+  } else {
+
     if (Get-Service -Name Perch*) {
         Uninstall-Perch
     } else 
@@ -2358,10 +2407,12 @@ try {
     } else {
         Write-Output "$(Get-FormattedDate) Something went wrong"
     }
+  }
 }
 catch {
     $errorMessage = $_.Exception.Message
     Write-Error "$(Get-FormattedDate) UNS ElasticSIEM Agent deployment failed because of $($errorMessage)"
+    $script:deployExitCode = 1
     break
 }
 finally {
