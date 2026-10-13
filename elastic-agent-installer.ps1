@@ -190,6 +190,80 @@ $thirdPartyAvServices = @(
 #$policy = "NoDefend"
 ###########################################################################################
 
+######## Settings from NinjaOne script variables (environment variables) ##########
+# NinjaOne hands script variables to the script as environment variables, so one script can serve every
+# client: create the variable in the task, leave the script alone. The environment name is the script
+# variable name with an "elastic" prefix and a capital first letter, so it cannot collide with
+# unrelated machine variables: $token -> elasticToken, $fleetURL -> elasticFleetURL,
+# $tokenServer -> elasticTokenServer, $uninstallTokenDC -> elasticUninstallTokenDC. For each setting the
+# first of these that has a value wins:
+#   1. a parameter given on the command line (-token, -fleetURL, ...)
+#   2. the environment variable (elastic...)
+#   3. the value hard-coded in the section above
+# Settings read: token, fleetURL, datapath, tag, uninstallToken, policy, the switches local / insecure /
+# disableRoleTags (true/1/yes/on turn them on, anything else off), and the per-role tokens
+# (tokenServer, tokenDC, uninstallTokenServer, ... see the list above). An empty variable, or the
+# text "null" that NinjaOne sends for one, counts as not set. Values are never printed, only where
+# each setting came from.
+function Get-EnvSettingName {
+    param ([string]$Name)
+    return ('elastic' + $Name.Substring(0, 1).ToUpper() + $Name.Substring(1))
+}
+function Get-EnvSetting {
+    param ([string]$Name)
+    $value = [Environment]::GetEnvironmentVariable((Get-EnvSettingName $Name))
+    if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+    $value = $value.Trim()
+    if ($value -like 'null') { return $null }
+    return $value
+}
+$script:SettingSources = New-Object System.Collections.Generic.List[string]
+
+foreach ($settingName in 'token', 'fleetURL', 'datapath', 'tag', 'uninstallToken', 'policy') {
+    if ($PSBoundParameters.ContainsKey($settingName)) {
+        # puts the parameter back in case a hard-coded line above replaced it
+        Set-Variable -Name $settingName -Value $PSBoundParameters[$settingName]
+        $script:SettingSources.Add("$settingName=parameter")
+        continue
+    }
+    $envValue = Get-EnvSetting $settingName
+    if ($null -ne $envValue) {
+        try {
+            Set-Variable -Name $settingName -Value $envValue -ErrorAction Stop
+            $script:SettingSources.Add("$settingName=environment($(Get-EnvSettingName $settingName))")
+        } catch {
+            Write-Output "[-] The '$(Get-EnvSettingName $settingName)' variable from the environment is not valid: $($_.Exception.Message)"
+            throw
+        }
+    } elseif (Get-Variable -Name $settingName -ValueOnly -ErrorAction SilentlyContinue) {
+        $script:SettingSources.Add("$settingName=script")
+    }
+}
+
+foreach ($switchName in 'local', 'insecure', 'disableRoleTags') {
+    if ($PSBoundParameters.ContainsKey($switchName)) { $script:SettingSources.Add("$switchName=parameter"); continue }
+    $envValue = Get-EnvSetting $switchName
+    if ($null -ne $envValue) {
+        $switchOn = [bool]($envValue -match '^(true|1|yes|y|on)$')
+        Set-Variable -Name $switchName -Value $switchOn
+        $script:SettingSources.Add("$switchName=environment($(Get-EnvSettingName $switchName)=$switchOn)")
+    }
+}
+
+foreach ($roleName in 'Workstation', 'WorkstationNoDefend', 'Server', 'Server2012', 'HyperV', 'HyperV2012', 'DC', 'DC2012', 'Other') {
+    foreach ($prefix in 'token', 'uninstallToken') {
+        $roleVariable = "$prefix$roleName"
+        $envValue = Get-EnvSetting $roleVariable
+        if ($null -ne $envValue) {
+            Set-Variable -Name $roleVariable -Value $envValue -Scope Script
+            $script:SettingSources.Add("$roleVariable=environment($(Get-EnvSettingName $roleVariable))")
+        } elseif (Get-Variable -Name $roleVariable -Scope Script -ValueOnly -ErrorAction SilentlyContinue) {
+            $script:SettingSources.Add("$roleVariable=script")
+        }
+    }
+}
+###########################################################################################
+
 # ======================================================================================
 # Diagnostics helpers (used by the deployment and by the final NEEDS_REVIEW report)
 # ======================================================================================
@@ -782,6 +856,7 @@ if ($tag) {
 # a token can be diagnosed from the NinjaOne log alone.
 if ($InstallOnly) {
     Write-Output "Deployment config: role=$(get_windows_role_type) [$script:roleEvidence], policy=$policyName (-policy $policyChoice$(if ($script:avEvidence) { ", AV: $script:avEvidence" })), enrollment token $(if ($token) { 'set' } else { 'NOT SET' }), fleet URL $(if ($fleetURL) { 'set' } else { 'NOT SET' }), uninstall token $(if ($uninstallToken) { 'set' } else { 'not set' }), tags: $(if ($tag) { $tag } else { '<none>' })"
+    Write-Output "Settings source: $(if ($script:SettingSources.Count -gt 0) { $script:SettingSources -join ', ' } else { '<none set>' })"
 }
 
 # Unattended deployment (started by the evaluation step, with no desktop to show the token form on):
