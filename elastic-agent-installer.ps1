@@ -123,7 +123,7 @@ param
 ######## Evaluation / deployment settings ##########
 # Offline fallback for the required agent version. The real source is agent-version on GitHub; this
 # is only used when GitHub can't be reached.
-$defaultVersion = [version]"9.5.4"
+$defaultVersion = [version]"9.5.5"
 
 # Seconds to wait between the end of the deployment and the confirmation check.
 $recheckDelaySeconds = 15
