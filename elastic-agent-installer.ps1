@@ -262,6 +262,37 @@ foreach ($roleName in 'Workstation', 'WorkstationNoDefend', 'Server', 'Server201
         }
     }
 }
+
+# Removes every elastic... setting from this process's environment, and the token variables from memory,
+# so nothing the task passed in is left for a later step or child process. Call it after the work is done
+# (the deployment process the evaluation starts reads the environment itself, so not before). The
+# environment of a process disappears with the process anyway; this is for anything launched later and
+# for the log: if a value turns out to be stored permanently (User or Machine scope), that is reported,
+# not deleted, because this script did not put it there.
+function Clear-ElasticEnvSettings {
+    $settingNames = @('token', 'fleetURL', 'datapath', 'tag', 'uninstallToken', 'policy', 'local', 'insecure', 'disableRoleTags')
+    foreach ($role in 'Workstation', 'WorkstationNoDefend', 'Server', 'Server2012', 'HyperV', 'HyperV2012', 'DC', 'DC2012', 'Other') {
+        $settingNames += "token$role"
+        $settingNames += "uninstallToken$role"
+    }
+    $cleared = 0
+    $persisted = @()
+    foreach ($settingName in $settingNames) {
+        $envName = Get-EnvSettingName $settingName
+        if ([Environment]::GetEnvironmentVariable($envName, 'Process')) { $cleared++ }
+        [Environment]::SetEnvironmentVariable($envName, [NullString]::Value, 'Process')   # a plain $null leaves an empty variable behind in PowerShell 7
+        foreach ($scope in 'User', 'Machine') {
+            try { if ([Environment]::GetEnvironmentVariable($envName, $scope)) { $persisted += "$envName ($scope)" } } catch { }
+        }
+    }
+    foreach ($secretName in $settingNames | Where-Object { $_ -match 'oken' }) {
+        Remove-Variable -Name $secretName -Scope Script -ErrorAction SilentlyContinue
+    }
+    Write-Output "Cleared $cleared elastic... setting(s) from the environment"
+    if ($persisted.Count -gt 0) {
+        Write-Output "WARNING: these are stored permanently on this machine and were NOT removed: $($persisted -join ', ')"
+    }
+}
 ###########################################################################################
 
 # ======================================================================================
@@ -562,11 +593,12 @@ if (-not $InstallOnly) {
 
     # 1. Evaluate. Nothing to do unless the agent is missing, broken, unreadable or outdated.
     Invoke-SiemEvaluation
-    if ($script:SiemEvalResult -eq "COMPLIANT") { exit }
+    if ($script:SiemEvalResult -eq "COMPLIANT") { Clear-ElasticEnvSettings; exit }
 
     # 2. Deploy, once. Forward whatever was passed on the command line to the deployment process.
     if (-not $PSCommandPath) {
         Set-SiemNeedsReview "Cannot start the deployment: script path is unknown (script was not run from a file)"
+        Clear-ElasticEnvSettings
         exit 1
     }
     $installArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-InstallOnly')
@@ -612,8 +644,10 @@ if (-not $InstallOnly) {
     if ($script:SiemEvalResult -ne "COMPLIANT") {
         Write-SiemDiagnostics
         Set-SiemNeedsReview "UNS SIEM Agent is still not compliant after deployment - manual review required"
+        Clear-ElasticEnvSettings
         exit 1   # non-zero so NinjaOne shows the action as failed, not SUCCESS
     }
+    Clear-ElasticEnvSettings
     exit
 }
 
@@ -864,7 +898,8 @@ if ($InstallOnly) {
 # missing. Otherwise the token form would wait forever for someone to fill it in. Run from an
 # interactive console the form is still shown.
 if ($InstallOnly -and (-not [Environment]::UserInteractive) -and (-not ($token -and $fleetURL))) {
-    Write-Output "[-] Enrollment token and/or fleet URL are not set for this machine ($(get_windows_role_type), policy $policyName) and the deployment is unattended, so it cannot ask for them. Set `$token$policyName (or `$token) and `$fleetURL in the hard-coded section at the top of the script."
+    Write-Output "[-] Enrollment token and/or fleet URL are not set for this machine ($(get_windows_role_type), policy $policyName) and the deployment is unattended, so it cannot ask for them. Set $(Get-EnvSettingName "token$policyName") (or $(Get-EnvSettingName 'token')) and $(Get-EnvSettingName 'fleetURL') as NinjaOne script variables, or `$token$policyName / `$fleetURL in the hard-coded section at the top of the script."
+    Clear-ElasticEnvSettings
     exit 1
 }
 
@@ -2333,6 +2368,7 @@ finally {
     Remove-ElasticLeftovers -path $datapath
     Write-Verbose "$(Get-FormattedDate) Going back to initial location: $($InitialLocation)" 
     Push-Location -LiteralPath $InitialLocation
+    Clear-ElasticEnvSettings
     Stop-Transcript -ErrorAction SilentlyContinue
     Write-Verbose "$(Get-FormattedDate) All temp files were removed."
     Write-Output "$(Get-FormattedDate) All temp files were removed."
