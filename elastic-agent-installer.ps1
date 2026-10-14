@@ -21,7 +21,7 @@ File Name       : elastic-agent-installer.ps1
 Author          : nkolev@unsinc.com
 Prerequisite    : PowerShell >= V4,V5
 Copyright       : 2024, UNS Inc
-Version         : 2026.10.07.0
+Version         : 2026.10.07.11
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
@@ -119,6 +119,16 @@ param
 
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
+
+# Script version: increase the last number by one (2026.10.07.12, ...; a new day starts with the date and .1) EVERY time this script is changed, and add a line
+# to the change log below. It is printed first in the output, so the log of a run shows which copy of
+# the script (e.g. the one stored in NinjaOne) actually ran.
+$ScriptVersion = "2026.10.07.11"
+# Change log:
+#   2026.10.07.11  Elastic Endpoint is removed with its own uninstaller (elastic-endpoint.exe uninstall --uninstall-token <token>),
+#                  trying every known policy token; recovery never uninstalls the freshly installed agent; tokens are masked in output.
+#   2026.10.07.10  Version before this change log started.
+Write-Output "UNS SIEM Agent installer script version $ScriptVersion"
 
 ######## Evaluation / deployment settings ##########
 # Offline fallback for the required agent version. The real source is agent-version on GitHub; this
