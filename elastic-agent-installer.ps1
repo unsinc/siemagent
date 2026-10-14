@@ -1749,7 +1749,7 @@ function Remove-ElasticInstallFiles {
 # Runs elastic-agent uninstall with a time limit and prints its output without the progress spinner.
 # Returns the exit code, or $null when it had to be stopped for running longer than the limit.
 function Invoke-ElasticAgentUninstallProcess {
-    param ([string]$ExePath, [string]$Arguments, [int]$TimeoutMinutes = 5)
+    param ([string]$ExePath, [string]$Arguments, [int]$TimeoutMinutes = 5, [string]$Label = "elastic-agent uninstall")
 
     $outFile = Join-Path $env:TEMP "uns-elastic-uninstall-out.txt"
     $errFile = Join-Path $env:TEMP "uns-elastic-uninstall-err.txt"
@@ -1760,13 +1760,25 @@ function Invoke-ElasticAgentUninstallProcess {
     if ($process.WaitForExit($TimeoutMinutes * 60 * 1000)) {
         $exitCode = $process.ExitCode
     } else {
-        Write-Output "$(Get-FormattedDate) elastic-agent uninstall did not finish within $TimeoutMinutes minutes, stopping it"
+        Write-Output "$(Get-FormattedDate) $Label did not finish within $TimeoutMinutes minutes, stopping it"
         if (Get-Command taskkill.exe -ErrorAction SilentlyContinue) { & taskkill.exe /PID $process.Id /T /F *> $null }
         else { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     }
     $null = $handle
 
-    Write-Output "$(Get-FormattedDate) elastic-agent uninstall finished with exit code $(if ($null -eq $exitCode) { '<timed out>' } else { $exitCode }). Uninstaller output:"
+    # The uninstaller can echo its own command line (a rejected option is printed back with its value):
+    # never let an uninstall token reach the log.
+    foreach ($tokenText in @(Get-UninstallTokenCandidates)) {
+        foreach ($file in @($outFile, $errFile)) {
+            if ((Test-Path $file) -and ((Get-Item $file).Length -gt 0)) {
+                $content = Get-Content -Path $file -Raw -ErrorAction SilentlyContinue
+                if ($content -and $content.Contains($tokenText)) {
+                    Set-Content -Path $file -Value $content.Replace($tokenText, '<uninstall token>') -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
+    Write-Output "$(Get-FormattedDate) $Label finished with exit code $(if ($null -eq $exitCode) { '<timed out>' } else { $exitCode }). Uninstaller output:"
     Format-ElasticInstallOutput $outFile
     if ((Test-Path $errFile) -and ((Get-Item $errFile).Length -gt 0)) {
         Write-Output "    Uninstaller error output:"
@@ -1774,6 +1786,52 @@ function Invoke-ElasticAgentUninstallProcess {
     }
     Remove-Item -Path $outFile, $errFile -Force -ErrorAction SilentlyContinue
     $script:UninstallExitCode = $exitCode
+}
+
+# Every uninstall token this machine could need, most likely first: the one given with -uninstallToken /
+# for this machine's policy, then the token of each other policy. An Endpoint left behind by an earlier
+# install belongs to the policy it was last enrolled in, which is not necessarily the policy this run
+# enrolls into, so its uninstall token may be any of them. A wrong token is simply refused.
+function Get-UninstallTokenCandidates {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $own = ($uninstallToken -join '').Trim()
+    if ($own) { $candidates.Add($own) }
+    foreach ($roleName in 'Workstation', 'WorkstationNoDefend', 'Server', 'ServerNoDefend', 'HyperV', 'HyperVNoDefend', 'DC', 'DCNoDefend', 'Other') {
+        $value = (@(Get-Variable -Name "uninstallToken$roleName" -ValueOnly -ErrorAction SilentlyContinue) -join '').Trim()
+        if ($value -and -not $candidates.Contains($value)) { $candidates.Add($value) }
+    }
+    return $candidates.ToArray()
+}
+
+# Removes the Elastic Endpoint (Elastic Defend) with its own uninstaller:
+#   & "C:\Program Files\Elastic\Endpoint\elastic-endpoint.exe" uninstall --uninstall-token <token>
+# This is the only thing that removes an Endpoint whose Elastic Agent is gone. Note the token is a
+# separate argument: elastic-endpoint.exe rejects the --uninstall-token=<token> form ("Unknown option").
+# Tries every candidate token and stops at the first that removes the service. Never touches the
+# Elastic Agent. Returns $true when the ElasticEndpoint service is gone.
+function Invoke-ElasticEndpointUninstall {
+    $endpointExe = Join-Path $env:ProgramFiles "Elastic\Endpoint\elastic-endpoint.exe"
+    if (-not (Test-Path -LiteralPath $endpointExe)) {
+        Write-Output "$(Get-FormattedDate) $endpointExe not found, cannot run the Endpoint's own uninstaller"
+        return ($null -eq (Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue))
+    }
+    $attempts = @(Get-UninstallTokenCandidates | ForEach-Object { "uninstall --uninstall-token $_" })
+    $attempts += "uninstall"   # last: an Endpoint without tamper protection needs no token
+    $number = 0
+    foreach ($arguments in $attempts) {
+        $number++
+        $what = if ($arguments -eq "uninstall") { "no token" } else { "uninstall token $($number) of $($attempts.Count - 1)" }
+        $script:UninstallExitCode = $null
+        Invoke-ElasticAgentUninstallProcess -ExePath $endpointExe -Arguments $arguments -Label "elastic-endpoint uninstall ($what)"
+        if ($script:UninstallExitCode -eq 0) {
+            $state = Wait-ElasticServicesGone -TimeoutSeconds 20
+            if (-not $state.EndpointPresent) {
+                Write-Output "$(Get-FormattedDate) Elastic Endpoint removed with its own uninstaller ($what)"
+                return $true
+            }
+        }
+    }
+    return $false
 }
 
 # Polls until neither the "Elastic Agent" nor "ElasticEndpoint" service exists, or
@@ -1853,6 +1911,12 @@ function Remove-ExistingElasticAgent {
         }
     } else {
         Write-Verbose "$(Get-FormattedDate) $existingAgentExe not found, cannot use supported uninstall path. Falling back to manual service removal."
+    }
+
+    # An Endpoint with no Elastic Agent in front of it (or one the agent uninstall did not take with it)
+    # is removed with its own uninstaller, trying every known uninstall token.
+    if (Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue) {
+        $uninstalled = (Invoke-ElasticEndpointUninstall) -and ($null -eq (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue))
     }
 
     # Manual fallback / safety net: covers the case where the supported uninstall wasn't
@@ -2396,28 +2460,15 @@ function Install-ElasticAgent {
                             Write-Output "$(Get-FormattedDate) Old Endpoint survived cleanup before this install; new agent is enrolled and running - waiting 60s for its policy, then retrying removal"
                             Start-Sleep -Seconds 60
 
-                            $uninstallTokenText = ($uninstallToken -join '').Trim()
-                            $tokenArg = if ($uninstallTokenText) { " --uninstall-token=$uninstallTokenText" } else { "" }
-
-                            $retryEndpointExe = Join-Path $env:ProgramFiles "Elastic\Endpoint\elastic-endpoint.exe"
-                            if (Test-Path $retryEndpointExe) {
-                                Write-Verbose "$(Get-FormattedDate) Retrying Endpoint removal via $retryEndpointExe"
-                                Invoke-ElasticAgentUninstallProcess -ExePath $retryEndpointExe -Arguments "uninstall$tokenArg"
-                            } else {
-                                Write-Verbose "$(Get-FormattedDate) $retryEndpointExe not found - policy may not include Elastic Defend, nothing to retry there"
-                            }
-
-                            $retryAgentExe = Join-Path $env:ProgramFiles "Elastic\Agent\elastic-agent.exe"
-                            if (Test-Path $retryAgentExe) {
-                                Write-Verbose "$(Get-FormattedDate) Retrying Agent removal via $retryAgentExe"
-                                Invoke-ElasticAgentUninstallProcess -ExePath $retryAgentExe -Arguments "uninstall --force$tokenArg"
-                            }
+                            # Only the old Endpoint is removed here, with its own uninstaller. The Elastic
+                            # Agent that was just installed and enrolled must stay: running
+                            # "elastic-agent uninstall" now would remove the new agent and leave the old
+                            # Endpoint behind.
+                            $null = Invoke-ElasticEndpointUninstall
 
                             $recoveryState = Wait-ElasticServicesGone
-                            if (-not $recoveryState.AgentPresent -and -not $recoveryState.EndpointPresent) {
-                                Write-Output "$(Get-FormattedDate) Recovery succeeded: old Endpoint is now fully removed. Machine has nothing installed and will get a clean install on the next scheduled run."
-                                Clear-ElasticEnvSettings
-                                exit 3
+                            if (-not $recoveryState.EndpointPresent) {
+                                Write-Output "$(Get-FormattedDate) Recovery succeeded: old Endpoint is removed and the new Elastic Agent is installed and running."
                             } else {
                                 Write-Output "$(Get-FormattedDate) Recovery FAILED: Elastic Agent present: $($recoveryState.AgentPresent), ElasticEndpoint present: $($recoveryState.EndpointPresent), even after a fresh install and retry. Manual review required."
                                 Write-SiemDiagnostics
