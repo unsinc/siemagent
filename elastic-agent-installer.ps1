@@ -671,6 +671,27 @@ if (-not $InstallOnly) {
     }
 
     # 3. Confirm, once.
+    # Exit codes 3/4 come from a self-heal recovery inside Install-ElasticAgent, for when
+    # the OLD Endpoint survived cleanup (Tamper Protection) and aborting there used to skip
+    # installing the new agent entirely. It force-installs anyway, then retries removal
+    # once the fresh enrollment gives it a non-orphaned uninstall-token context. Both need
+    # to bypass the normal recheck below: after a successful self-heal (3) the machine is
+    # deliberately empty, which the recheck would misread as "not installed" and escalate
+    # to NEEDS_REVIEW; the parent's own siemAgent-property functions are used directly
+    # instead, same as the -UninstallOnly branch above already does for its own exit code.
+    if ($childExitCode -eq 3) {
+        Write-Output "UNS SIEM Agent self-healed: old Endpoint removed via a retry after a fresh enrollment; machine is intentionally empty and the next scheduled run will install it clean"
+        Ninja-Property-Set siemAgent "Self-healed - awaiting next run"
+        Write-Output "SIEM_AGENT_STATUS: SELF_HEALED_PENDING_NEXT_RUN"
+        Clear-ElasticEnvSettings
+        exit   # exit 0: this was a successful recovery action, not a failed task
+    }
+    if ($childExitCode -eq 4) {
+        Set-SiemNeedsReview "New UNS SIEM Agent installed and running, but the old Endpoint could not be removed even after a retry with a fresh enrollment - manual review required"
+        Clear-ElasticEnvSettings
+        exit 1
+    }
+
     Write-Output "Waiting $recheckDelaySeconds seconds before confirming the deployment"
     Start-Sleep -Seconds $recheckDelaySeconds
     Invoke-SiemEvaluation -Recheck
@@ -1755,6 +1776,24 @@ function Invoke-ElasticAgentUninstallProcess {
     $script:UninstallExitCode = $exitCode
 }
 
+# Polls until neither the "Elastic Agent" nor "ElasticEndpoint" service exists, or
+# TimeoutSeconds elapses. A service marked for deletion can briefly remain visible, and a
+# tamper-protected service may not go away at all, so this is checked instead of assumed.
+# Shared by Remove-ExistingElasticAgent and the post-install recovery retry in
+# Install-ElasticAgent, so both report removal the same way.
+function Wait-ElasticServicesGone {
+    param ([int]$TimeoutSeconds = 30)
+    $elapsed = 0
+    while ((($null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)) -or ($null -ne (Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue))) -and ($elapsed -lt $TimeoutSeconds)) {
+        Start-Sleep -Seconds 2
+        $elapsed += 2
+    }
+    return @{
+        AgentPresent    = $null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)
+        EndpointPresent = $null -ne (Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue)
+    }
+}
+
 # Function to cleanly remove a pre-existing Elastic Agent / Elastic Endpoint installation
 # before redeploying. When the Elastic Defend integration is enabled on the agent's policy,
 # Fleet installs a second, independent Windows service ("ElasticEndpoint" / "Elastic Endpoint")
@@ -1768,6 +1807,9 @@ function Invoke-ElasticAgentUninstallProcess {
 # can't be found, and verify removal instead of assuming success.
 function Remove-ExistingElasticAgent {
     param ()
+
+    $script:OldEndpointSurvivedCleanup = $false
+    $script:OldAgentSurvivedCleanup = $false
 
     $agentService = Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue
     $endpointService = Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue
@@ -1831,20 +1873,24 @@ function Remove-ExistingElasticAgent {
 
     # Verify removal instead of assuming success - a service marked for deletion can briefly
     # remain visible, and a tamper-protected service may not actually go away at all.
-    $timeoutSeconds = 30
-    $elapsed = 0
-    while ((($null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)) -or ($null -ne (Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue))) -and ($elapsed -lt $timeoutSeconds)) {
-        Start-Sleep -Seconds 2
-        $elapsed += 2
-    }
+    $removalState = Wait-ElasticServicesGone
+    $script:OldEndpointSurvivedCleanup = $removalState.EndpointPresent
+    $script:OldAgentSurvivedCleanup = $removalState.AgentPresent
 
-    $agentStillPresent = $null -ne (Get-Service -Name "Elastic Agent" -ErrorAction SilentlyContinue)
-    $endpointStillPresent = $null -ne (Get-Service -Name "ElasticEndpoint" -ErrorAction SilentlyContinue)
-    if ($agentStillPresent -or $endpointStillPresent) {
-        Write-Error "$(Get-FormattedDate) Failed to fully remove existing installation (Elastic Agent present: $agentStillPresent, ElasticEndpoint present: $endpointStillPresent). This is likely Agent Tamper Protection blocking removal - re-run with -uninstallToken <token>." -ErrorAction Stop
+    if ($removalState.AgentPresent -or $removalState.EndpointPresent) {
+        # NOT a terminating error (this used to be Write-Error ... -ErrorAction Stop): a
+        # tamper-protected Endpoint commonly survives both the supported uninstall and the
+        # manual fallback above, and aborting here used to skip the new-agent install
+        # entirely - the catch block in Install-ElasticAgent would exit 1 before
+        # elastic-agent.exe install ever ran, leaving the machine with a half-removed
+        # Endpoint (files still locked) and no working agent at all. Report it and let
+        # Install-ElasticAgent proceed with its force-install anyway - confirmed to succeed
+        # over this exact leftover state - then retry removal once the fresh enrollment
+        # gives it a non-orphaned uninstall-token context (see the recovery block there).
+        Write-Output "$(Get-FormattedDate) Could not fully remove existing installation (Elastic Agent present: $($removalState.AgentPresent), ElasticEndpoint present: $($removalState.EndpointPresent)) - likely Agent Tamper Protection blocking removal. Proceeding with the new install anyway; removal will be retried once it is enrolled."
+    } else {
+        Write-Output "$(Get-FormattedDate) Old agent/endpoint services removed, deploying UNS SIEM Agent"
     }
-
-    Write-Output "$(Get-FormattedDate) Old agent/endpoint services removed, deploying UNS SIEM Agent"
 }
 
 # Reads agent.grpc.port from an elastic-agent.yml: the number, or $null when it is not set in that file
@@ -2322,7 +2368,64 @@ function Install-ElasticAgent {
                         } else {
                             Write-Verbose "$(Get-FormattedDate) Service started successfully"
                         }
-    
+
+                        # The new agent is up. If the OLD Endpoint survived cleanup before this
+                        # install (Remove-ExistingElasticAgent set this instead of aborting),
+                        # retry removing it now: the fresh enrollment gives Fleet/Endpoint a
+                        # non-orphaned uninstall-token context, which is what makes removal
+                        # succeed where the pre-install attempt did not - this automates the
+                        # manual recovery sequence (force-install, wait for policy, uninstall
+                        # Endpoint then Agent, leave the machine empty for the next scheduled
+                        # run) rather than aborting before the agent is ever installed. Only
+                        # attempted when the new agent itself is confirmed healthy.
+                        #
+                        # This -InstallOnly deployment process never runs the parent evaluation
+                        # process's "if (-not $InstallOnly)" block, so Set-SiemNeedsReview,
+                        # Invoke-SiemEvaluation and the status-marker variables (all defined
+                        # inside that block) are not available here - but Clear-ElasticEnvSettings
+                        # and Write-SiemDiagnostics are defined at top level and work in both.
+                        # Regardless, the parent's normal post-deploy recheck would see "not
+                        # installed" after a successful self-heal and wrongly report
+                        # NEEDS_REVIEW, so the outcome is signalled back via a distinct exit code
+                        # instead (3 = self-healed, machine intentionally empty; 4 = new agent
+                        # fine but the old remnant still would not go away) - same pattern the
+                        # parent already uses for -UninstallOnly (checks $childExitCode directly
+                        # instead of recomputing compliance). The parent's exit-code handling has
+                        # a matching update.
+                        if ($script:AgentInstallOk -and $script:OldEndpointSurvivedCleanup) {
+                            Write-Output "$(Get-FormattedDate) Old Endpoint survived cleanup before this install; new agent is enrolled and running - waiting 60s for its policy, then retrying removal"
+                            Start-Sleep -Seconds 60
+
+                            $uninstallTokenText = ($uninstallToken -join '').Trim()
+                            $tokenArg = if ($uninstallTokenText) { " --uninstall-token=$uninstallTokenText" } else { "" }
+
+                            $retryEndpointExe = Join-Path $env:ProgramFiles "Elastic\Endpoint\elastic-endpoint.exe"
+                            if (Test-Path $retryEndpointExe) {
+                                Write-Verbose "$(Get-FormattedDate) Retrying Endpoint removal via $retryEndpointExe"
+                                Invoke-ElasticAgentUninstallProcess -ExePath $retryEndpointExe -Arguments "uninstall$tokenArg"
+                            } else {
+                                Write-Verbose "$(Get-FormattedDate) $retryEndpointExe not found - policy may not include Elastic Defend, nothing to retry there"
+                            }
+
+                            $retryAgentExe = Join-Path $env:ProgramFiles "Elastic\Agent\elastic-agent.exe"
+                            if (Test-Path $retryAgentExe) {
+                                Write-Verbose "$(Get-FormattedDate) Retrying Agent removal via $retryAgentExe"
+                                Invoke-ElasticAgentUninstallProcess -ExePath $retryAgentExe -Arguments "uninstall --force$tokenArg"
+                            }
+
+                            $recoveryState = Wait-ElasticServicesGone
+                            if (-not $recoveryState.AgentPresent -and -not $recoveryState.EndpointPresent) {
+                                Write-Output "$(Get-FormattedDate) Recovery succeeded: old Endpoint is now fully removed. Machine has nothing installed and will get a clean install on the next scheduled run."
+                                Clear-ElasticEnvSettings
+                                exit 3
+                            } else {
+                                Write-Output "$(Get-FormattedDate) Recovery FAILED: Elastic Agent present: $($recoveryState.AgentPresent), ElasticEndpoint present: $($recoveryState.EndpointPresent), even after a fresh install and retry. Manual review required."
+                                Write-SiemDiagnostics
+                                Clear-ElasticEnvSettings
+                                exit 4
+                            }
+                        }
+
                     }
                     catch {
                         $errorMessage = $_.Exception.Message
