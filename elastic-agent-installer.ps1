@@ -123,7 +123,7 @@ param
 # Script version: increase the last number by one (2026.10.07.12, ...; a new day starts with the date and .1) EVERY time this script is changed, and add a line
 # to the change log below. It is printed first in the output, so the log of a run shows which copy of
 # the script (e.g. the one stored in NinjaOne) actually ran.
-$ScriptVersion = "2026.10.07.11"
+$ScriptVersion = "2026.10.07.12"
 # Change log:
 #   2026.10.07.11  Elastic Endpoint is removed with its own uninstaller (elastic-endpoint.exe uninstall --uninstall-token <token>),
 #                  trying every known policy token; recovery never uninstalls the freshly installed agent; tokens are masked in output.
@@ -418,7 +418,11 @@ function Write-SiemDiagnostics {
     try {
         $listeners = @(Get-PortListener -Port $defaultAgentGrpcPort)
         if ($listeners.Count -gt 0) {
-            foreach ($listener in $listeners) { Write-Output "Port ${defaultAgentGrpcPort} (agent default) is in use: $listener" }
+            foreach ($listener in $listeners) {
+                # the agent itself listens on this port when it runs normally, which is not a conflict
+                if ($listener -match 'elastic-agent') { Write-Output "Port ${defaultAgentGrpcPort} (agent default) is held by the installed agent itself (normal): $listener" }
+                else { Write-Output "Port ${defaultAgentGrpcPort} (agent default) is in use by another program: $listener" }
+            }
         } elseif (-not (Test-PortBindable -Port $defaultAgentGrpcPort)) {
             Write-Output "Port ${defaultAgentGrpcPort} (agent default) has no listener but cannot be bound (Windows excluded port range or a security product)"
         }
@@ -689,6 +693,14 @@ if (-not $InstallOnly) {
     # deliberately empty, which the recheck would misread as "not installed" and escalate
     # to NEEDS_REVIEW; the parent's own siemAgent-property functions are used directly
     # instead, same as the -UninstallOnly branch above already does for its own exit code.
+    # Exit code 2: the deployment refused to start because the NinjaOne variables are incomplete (the child
+    # printed which ones). Nothing was changed, so waiting and re-evaluating would only repeat the old state.
+    if ($childExitCode -eq 2) {
+        Write-Output "UNS SIEM Agent deployment was not started because of a configuration problem (see the missing items above); the existing installation was left untouched"
+        Set-SiemNeedsReview "Deployment configuration is incomplete - add the missing script variable(s) listed above and run again"
+        Clear-ElasticEnvSettings
+        exit 1
+    }
     if ($childExitCode -eq 3) {
         Write-Output "UNS SIEM Agent self-healed: old Endpoint removed via a retry after a fresh enrollment; machine is intentionally empty and the next scheduled run will install it clean"
         Ninja-Property-Set siemAgent "Self-healed - awaiting next run"
@@ -965,9 +977,16 @@ if ($InstallOnly) {
 # missing. Otherwise the token form would wait forever for someone to fill it in. Run from an
 # interactive console the form is still shown.
 if ($InstallOnly -and (-not $UninstallOnly) -and (-not [Environment]::UserInteractive) -and (-not ($token -and $fleetURL))) {
-    Write-Output "[-] Enrollment token and/or fleet URL are not set for this machine ($(get_windows_role_type), policy $policyName) and the deployment is unattended, so it cannot ask for them. Set $(Get-EnvSettingName "token$policyName") (or $(Get-EnvSettingName 'token')) and $(Get-EnvSettingName 'fleetURL') as NinjaOne script variables, or `$token$policyName / `$fleetURL in the hard-coded section at the top of the script."
+    # Exit code 2 = configuration problem, nothing was changed. The evaluation step reads it and skips the
+    # wait and the re-check, which could only report the same old state again.
+    $missingSettings = @()
+    if (-not $token)    { $missingSettings += "enrollment token for policy ${policyName}: set $(Get-EnvSettingName "token$policyName") (or $(Get-EnvSettingName 'token') for every role)" }
+    if (-not $fleetURL) { $missingSettings += "fleet URL: set $(Get-EnvSettingName 'fleetURL')" }
+    Write-Output "[-] Configuration error - the deployment was NOT started and nothing on this machine was changed (it is unattended, so it cannot ask for the missing value)."
+    foreach ($missingSetting in $missingSettings) { Write-Output "    Missing $missingSetting" }
+    Write-Output "    This machine was detected as role $(get_windows_role_type) and mapped to policy $policyName [$script:roleEvidence]. If that is not the policy it should use, set $(Get-EnvSettingName 'policy') (Auto, NoDefend, Defend or Other) or give the token of the right policy. A token is never borrowed from another policy."
     Clear-ElasticEnvSettings
-    exit 1
+    exit 2
 }
 
 if (($local) -and (-not $datapath)) {
