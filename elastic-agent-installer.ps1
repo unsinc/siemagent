@@ -21,7 +21,7 @@ File Name       : elastic-agent-installer.ps1
 Author          : nkolev@unsinc.com
 Prerequisite    : PowerShell >= V4,V5
 Copyright       : 2024, UNS Inc
-Version         : 2026.10.07.11
+Version         : 2026.10.07.14
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
