@@ -117,14 +117,26 @@ param
     [Parameter(Mandatory = $false)]
     [switch]$UninstallOnly,
 
+    # Set by the evaluation step when it starts the deployment, so both use the same agent version. Not meant to be given by hand.
+    [Parameter(Mandatory = $false)]
+    [string]$TargetVersion,
+
     [parameter(ValueFromRemainingArguments=$true)]$invalid_parameter
 )
 
 # Script version: increase the last number by one (2026.10.07.12, ...; a new day starts with the date and .1) EVERY time this script is changed, and add a line
 # to the change log below. It is printed first in the output, so the log of a run shows which copy of
 # the script (e.g. the one stored in NinjaOne) actually ran.
-$ScriptVersion = "2026.10.07.12"
+$ScriptVersion = "2026.10.07.14"
 # Change log:
+#   2026.10.07.14  Failure exits reach the evaluation process as non-zero (Stop-Deployment; exit 4 used to become 0); the old-Endpoint
+#                  cleanup after install only removes a stray Endpoint under a ...NoDefend policy and never an Endpoint a Defend policy
+#                  takes over; dead exit-3 branch removed; downloads have time limits and reject empty files; Perch exit codes 3010/1641/1605
+#                  are success; Sysmon config is re-applied when it changed; the agent is found by service name; the version is decided once
+#                  (-TargetVersion); one deployment at a time (named mutex).
+#   2026.10.07.13  -UninstallOnly no longer runs the Sysmon file copy (it failed and never reached the uninstall); the Sysmon
+#                  copy retry catches System.IO.FileNotFoundException (the short name was not a valid type) and no longer rethrows.
+#   2026.10.07.12  Missing token/URL is reported as exit code 2 (no wait or re-check); uninstall tries every known policy token.
 #   2026.10.07.11  Elastic Endpoint is removed with its own uninstaller (elastic-endpoint.exe uninstall --uninstall-token <token>),
 #                  trying every known policy token; recovery never uninstalls the freshly installed agent; tokens are masked in output.
 #   2026.10.07.10  Version before this change log started.
@@ -499,6 +511,24 @@ function Write-SiemDiagnostics {
 # ======================================================================================
 if (-not $InstallOnly) {
 
+    # One deployment at a time: two overlapping runs would share the download folder and fight over the
+    # uninstall. A named mutex is held by this process until it exits (a run that was killed releases it too).
+    $script:DeploymentMutex = $null
+    $lockAcquired = $true
+    try {
+        $script:DeploymentMutex = New-Object System.Threading.Mutex($false, 'Global\UNS-SIEM-Agent-Deployment')
+        try { $lockAcquired = $script:DeploymentMutex.WaitOne(0) }
+        catch [System.Threading.AbandonedMutexException] { $lockAcquired = $true }
+    } catch {
+        Write-Output "WARNING: could not create the deployment lock ($($_.Exception.Message)); continuing without it"
+    }
+    if (-not $lockAcquired) {
+        Write-Output "Another UNS SIEM Agent deployment is already running on this machine; this run does nothing."
+        Write-Output "SIEM_AGENT_STATUS: DEPLOYMENT_IN_PROGRESS"
+        Clear-ElasticEnvSettings
+        exit
+    }
+
     # $defaultVersion (the offline fallback) is set in the settings block at the top of the script.
     try {
         $remoteVersion = (Invoke-RestMethod `
@@ -547,7 +577,8 @@ if (-not $InstallOnly) {
 
         $script:SiemEvalResult = "ACTION_REQUIRED"
 
-        $siemAgentService = Get-Service -DisplayName 'UNS SIEM Agent' -ErrorAction SilentlyContinue
+        # by the stable service name; the display name "UNS SIEM Agent" is only branding and can be reset
+        $siemAgentService = Get-Service -Name 'Elastic Agent' -ErrorAction SilentlyContinue
 
         if (-not $siemAgentService) {
             Write-Output "UNS SIEM Agent is not installed"
@@ -562,7 +593,8 @@ if (-not $InstallOnly) {
         }
 
         # Always query binary version only (daemon may be dead)
-        $versionOutput = & $agentBinaryPath version --binary-only 2>$null
+        # joined into one string: -notmatch on an array of lines filters it instead of returning a yes/no
+        $versionOutput = (@(& $agentBinaryPath version --binary-only 2>$null) -join "`n")
 
         if ($versionOutput -notmatch 'Binary:\s+([0-9]+\.[0-9]+\.[0-9]+)') {
             Write-Output "UNS SIEM Agent installed, but version could not be parsed"
@@ -632,6 +664,8 @@ if (-not $InstallOnly) {
     foreach ($name in 'local', 'insecure', 'UninstallOnly', 'Verbose') {
         if ($PSBoundParameters.ContainsKey($name) -and $PSBoundParameters[$name]) { $installArgs += "-$name" }
     }
+    $installArgs += '-TargetVersion'
+    $installArgs += $requiredVersion.ToString()
     $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if (-not (Test-Path $powershellExe)) { $powershellExe = 'powershell.exe' }
 
@@ -685,31 +719,19 @@ if (-not $InstallOnly) {
     }
 
     # 3. Confirm, once.
-    # Exit codes 3/4 come from a self-heal recovery inside Install-ElasticAgent, for when
-    # the OLD Endpoint survived cleanup (Tamper Protection) and aborting there used to skip
-    # installing the new agent entirely. It force-installs anyway, then retries removal
-    # once the fresh enrollment gives it a non-orphaned uninstall-token context. Both need
-    # to bypass the normal recheck below: after a successful self-heal (3) the machine is
-    # deliberately empty, which the recheck would misread as "not installed" and escalate
-    # to NEEDS_REVIEW; the parent's own siemAgent-property functions are used directly
-    # instead, same as the -UninstallOnly branch above already does for its own exit code.
-    # Exit code 2: the deployment refused to start because the NinjaOne variables are incomplete (the child
-    # printed which ones). Nothing was changed, so waiting and re-evaluating would only repeat the old state.
+    # The deployment process reports its outcome as an exit code (see Stop-Deployment):
+    #   0 finished (the re-check below decides whether the machine is compliant)
+    #   1 failed (the re-check below reports the state it left behind)
+    #   2 configuration problem, nothing was changed: no point waiting and re-checking
+    #   4 new agent installed and running, but a stray old Endpoint could not be removed
     if ($childExitCode -eq 2) {
         Write-Output "UNS SIEM Agent deployment was not started because of a configuration problem (see the missing items above); the existing installation was left untouched"
         Set-SiemNeedsReview "Deployment configuration is incomplete - add the missing script variable(s) listed above and run again"
         Clear-ElasticEnvSettings
         exit 1
     }
-    if ($childExitCode -eq 3) {
-        Write-Output "UNS SIEM Agent self-healed: old Endpoint removed via a retry after a fresh enrollment; machine is intentionally empty and the next scheduled run will install it clean"
-        Ninja-Property-Set siemAgent "Self-healed - awaiting next run"
-        Write-Output "SIEM_AGENT_STATUS: SELF_HEALED_PENDING_NEXT_RUN"
-        Clear-ElasticEnvSettings
-        exit   # exit 0: this was a successful recovery action, not a failed task
-    }
     if ($childExitCode -eq 4) {
-        Set-SiemNeedsReview "New UNS SIEM Agent installed and running, but the old Endpoint could not be removed even after a retry with a fresh enrollment - manual review required"
+        Set-SiemNeedsReview "New UNS SIEM Agent installed and running, but a stray old Endpoint could not be removed even after a retry - manual review required"
         Clear-ElasticEnvSettings
         exit 1
     }
@@ -1010,6 +1032,16 @@ function Get-MaskedSecret {
     return '*' * $text.Length
 }
 
+# Ends the deployment process with an exit code the parent can trust. A plain "exit <code>" inside the
+# deployment's try block is replaced by the "exit $script:deployExitCode" in its finally block (so a failure
+# used to reach the parent as 0), which is why the code is stored first. 1 = failed, 2 = configuration problem,
+# 4 = new agent fine but a stray old Endpoint could not be removed.
+function Stop-Deployment {
+    param ([int]$Code = 1)
+    $script:deployExitCode = $Code
+    exit $Code
+}
+
 # Time function
 function Get-FormattedDate {
     Get-Date -Format "yyyyMMdd_HHmmss"
@@ -1031,17 +1063,23 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 ## setttings ##
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Fetch agent version from remote, fall back to hardcoded default
-$agentVersion = "9.5.4"
-try {
-    $remoteVersion = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/unsinc/siemagent/refs/heads/main/agent-version" -UseBasicParsing -ErrorAction Stop).Content.Trim()
-    if ($remoteVersion -match '^\d+\.\d+\.\d+$') {
-        $agentVersion = $remoteVersion
-    } else {
-        Write-Verbose "$(Get-FormattedDate) Remote version format unexpected, using default: $agentVersion"
+# The agent version is decided once, by the evaluation step, and handed over with -TargetVersion so the version
+# that is installed is the version that is checked afterwards. Only when this process is started by hand does it
+# look it up itself, falling back to the single default at the top of the script.
+$agentVersion = $defaultVersion.ToString()
+if ($TargetVersion -match '^\d+\.\d+\.\d+$') {
+    $agentVersion = $TargetVersion
+} else {
+    try {
+        $remoteVersion = (Invoke-WebRequest -Uri "https://raw.githubusercontent.com/unsinc/siemagent/refs/heads/main/agent-version" -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop).Content.Trim()
+        if ($remoteVersion -match '^\d+\.\d+\.\d+$') {
+            $agentVersion = $remoteVersion
+        } else {
+            Write-Verbose "$(Get-FormattedDate) Remote version format unexpected, using default: $agentVersion"
+        }
+    } catch {
+        Write-Verbose "$(Get-FormattedDate) Could not fetch remote version, using default: $agentVersion"
     }
-} catch {
-    Write-Verbose "$(Get-FormattedDate) Could not fetch remote version, using default: $agentVersion"
 }
 Write-Output "$(Get-FormattedDate) Using Elastic Agent version: $agentVersion"
 
@@ -1110,13 +1148,13 @@ if ($datapath) {
             $errorMessage = "File Path too long. Maximum allowed characters 256."
             Write-Error $errorMessage -ErrorAction Stop
             Start-Sleep 5
-            exit
+            Stop-Deployment
         }
         catch {
             $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) $datapath folder creation failed because of: $errorMessage"
             Start-Sleep 5
-            exit
+            Stop-Deployment
         }
     }
 } else {
@@ -1132,13 +1170,13 @@ if ($datapath) {
             $errorMessage = "Data path too long. Maximum allowed characters 256."
             Write-Error $errorMessage -ErrorAction Stop
             Start-Sleep 5
-            exit
+            Stop-Deployment
         }
         catch {
             $errorMessage = $_.Exception.Message
             Write-Error "$(Get-FormattedDate) $datapath folder creation failed because of: $errorMessage"
             Start-Sleep 5
-            exit
+            Stop-Deployment
         }
     }
 }
@@ -1252,10 +1290,36 @@ foreach ($i in 0..($agentPaths.Length - 1)) {
 }
 
 if (-not $UninstallOnly) { Write-Output "$(Get-FormattedDate) Downloading required deployment files, please be patient." }
-# Function to download files from the internet
+# WebClient with a time limit: the stock WebClient waits forever on a stalled connection. Timeout covers
+# connecting and the first response, ReadWriteTimeout a transfer that stops moving.
+if (-not $UninstallOnly) {
+    try {
+        if (-not ('UnsWebClient' -as [type])) {
+            Add-Type -TypeDefinition @"
+using System;
+using System.Net;
+public class UnsWebClient : WebClient {
+    public int TimeoutMs = 60000;
+    protected override WebRequest GetWebRequest(Uri address) {
+        WebRequest request = base.GetWebRequest(address);
+        request.Timeout = TimeoutMs;
+        HttpWebRequest http = request as HttpWebRequest;
+        if (http != null) { http.ReadWriteTimeout = TimeoutMs; }
+        return request;
+    }
+}
+"@
+        }
+    } catch {
+        Write-Verbose "$(Get-FormattedDate) Could not create the time-limited download client, using the default one: $($_.Exception.Message)"
+    }
+}
+
+# Function to download files from the internet. Up to 3 attempts; each uses the time-limited client and, if
+# that fails, Invoke-WebRequest (also time-limited). An empty file counts as a failed download.
 function Get-UNSFiles($downloadUrl, $installPath) {
-    # A file left behind (or still locked) by an earlier run makes every download method below fail
-    # with "being used by another process". Clear it first, and stop with a clear message if it is locked.
+    # A file left behind (or still locked) by an earlier run makes the download fail with
+    # "being used by another process". Clear it first, and stop with a clear message if it is locked.
     if (Test-Path -LiteralPath $installPath) {
         for ($wait = 0; $wait -lt 5; $wait++) {
             try { Remove-Item -LiteralPath $installPath -Force -ErrorAction Stop; break }
@@ -1267,49 +1331,38 @@ function Get-UNSFiles($downloadUrl, $installPath) {
         }
     }
 
-    $retryCount = 0
-    do {
+    $downloadSuccessful = $false
+    for ($attempt = 1; ($attempt -le 3) -and (-not $downloadSuccessful); $attempt++) {
+        $webClient = $null
         try {
-            $webClient = New-Object System.Net.WebClient
-            $downloadTask = $webClient.DownloadFileTaskAsync($downloadUrl, $installPath)
-            $downloadTask.Wait()
+            $webClient = if ('UnsWebClient' -as [type]) { New-Object UnsWebClient } else { New-Object System.Net.WebClient }
+            $webClient.DownloadFile($downloadUrl, $installPath)
             $downloadSuccessful = $true
         }
         catch {
-            $asyncReason = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
-            Write-Error "$(Get-FormattedDate) Asynchronous download failed ($asyncReason). Trying synchronous download."
-            # the failed async download can keep the target file open; use a fresh client for the retry
-            try { $webClient.Dispose() } catch { }
-            $webClient = New-Object System.Net.WebClient
+            Write-Output "$(Get-FormattedDate) Download attempt $attempt of 3 failed ($($_.Exception.Message)). Trying Invoke-WebRequest."
             try {
-                $webClient.DownloadFile($downloadUrl, $installPath)
+                Invoke-WebRequest -Uri $downloadUrl -OutFile $installPath -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
                 $downloadSuccessful = $true
             }
             catch {
-                Write-Error "$(Get-FormattedDate) Synchronous download failed ($($_.Exception.Message)). Trying Invoke-WebRequest."
-                try { $webClient.Dispose() } catch { }
-                try {
-                    Invoke-WebRequest -Uri $downloadUrl -OutFile $installPath -UseBasicParsing
-                    while (!(Test-Path $installPath) -or (Get-Item $installPath).length -eq 0) {
-                        Write-Host "Waiting for the file to be downloaded..."
-                        Start-Sleep -Seconds 1
-                    }
-                    $downloadSuccessful = $true
-                }
-                catch {
-                    $errorMessage = $_.Exception.Message
-                    Write-Error "$(Get-FormattedDate) Failed to download files for following reasons: $errorMessage"
-                    $downloadSuccessful = $false
-                    $retryCount++
-                }
+                Write-Output "$(Get-FormattedDate) Invoke-WebRequest failed too ($($_.Exception.Message))."
             }
         }
-    } while (-not $downloadSuccessful -and $retryCount -lt 3)
+        finally {
+            if ($webClient) { try { $webClient.Dispose() } catch { } }
+        }
 
-    if ($webClient) { try { $webClient.Dispose() } catch { } }
+        if ($downloadSuccessful -and ((-not (Test-Path -LiteralPath $installPath)) -or ((Get-Item -LiteralPath $installPath).Length -eq 0))) {
+            Write-Output "$(Get-FormattedDate) The download produced an empty file, treating it as failed."
+            Remove-Item -LiteralPath $installPath -Force -ErrorAction SilentlyContinue
+            $downloadSuccessful = $false
+        }
+        if ((-not $downloadSuccessful) -and ($attempt -lt 3)) { Start-Sleep -Seconds (5 * $attempt) }
+    }
 
     if (-not $downloadSuccessful) {
-        Write-Error "$(Get-FormattedDate) Failed to download files after 3 attempts"
+        Write-Error "$(Get-FormattedDate) Failed to download $downloadUrl after 3 attempts"
         exit 1
     }
 }
@@ -1352,7 +1405,7 @@ try {
 catch {
     $errorMessage = $_.Exception.Message
     Write-Error "$(Get-FormattedDate) Folder creation error message: $errorMessage."
-    exit
+    Stop-Deployment
 }
 
 Write-Verbose "$(Get-FormattedDate) InstallDIR is $InstallDIR"
@@ -1413,12 +1466,11 @@ function CopyFilesToDir {
                 $retryCount++
             }
         }
-        catch [FileNotFoundException] {
+        catch [System.IO.FileNotFoundException] {
             Write-Output "$(Get-FormattedDate) File not found. Attempting to copy file  again."
-            throw
             $copySuccessful = $false
             $retryCount++
-            throw 
+            Start-Sleep -Seconds 2
         }
         catch {
             Write-Error "Sysmon files copy failed"
@@ -1427,19 +1479,24 @@ function CopyFilesToDir {
             $copySuccessful = $false
             $retryCount++
         }
+        if (-not $copySuccessful) { Start-Sleep -Seconds 2 }
     } while (-not $copySuccessful -and $retryCount -lt 3)
 
     if (-not $copySuccessful) {
         Write-Error "$(Get-FormattedDate) Failed to copy Sysmon files after 3 attempts"
-        exit
+        Stop-Deployment
     }
 }
-CopyFilesToDir
+# -UninstallOnly downloads nothing and installs nothing, so there is no Sysmon package or config to copy
+# and the UNS install folder may not even exist.
+if (-not $UninstallOnly) {
+    CopyFilesToDir
 
-# Set current location to the installation directory
-Set-Location -Path $InstallDIR -ErrorAction Stop
-$currentLocation = Get-Location
-Write-Verbose -Message "$(Get-FormattedDate) Setting working location of $(Get-Location)"
+    # Set current location to the installation directory
+    Set-Location -Path $InstallDIR -ErrorAction Stop
+    $currentLocation = Get-Location
+    Write-Verbose -Message "$(Get-FormattedDate) Setting working location of $(Get-Location)"
+}
 
 
 function Uninstall-Sysmon32 {
@@ -1462,7 +1519,7 @@ function Uninstall-Sysmon32 {
     catch {
         $errorMessage = $_.Exception.Message
         Write-Error "$(Get-FormattedDate) Error while uninstalling Sysmon32: $errorMessage"
-        exit
+        Stop-Deployment
     }
     #destroy the handle cache
     $null = $handle
@@ -1588,16 +1645,17 @@ function Uninstall-Perch {
             $process.WaitForExit()
 
             # Check the exit code
-            if ($process.ExitCode -ne 0) {
-                throw "Installation failed with exit code $($process.ExitCode)"
+            # 0 = removed, 3010/1641 = removed and a reboot is pending, 1605 = it was not installed (all fine)
+            if ($process.ExitCode -notin 0, 3010, 1641, 1605) {
+                throw "Perch uninstall failed with exit code $($process.ExitCode)"
             } else {
-                Write-Verbose "$(Get-FormattedDate) Perch uninstall completed."
+                Write-Verbose "$(Get-FormattedDate) Perch uninstall completed (exit code $($process.ExitCode))."
             }
 
         } catch {
                 $errorMessage = $_.Exception.Message
-                Write-Error "$(Get-FormattedDate) Error while uninstalling Sysmon32: $errorMessage"
-                exit
+                Write-Error "$(Get-FormattedDate) Error while uninstalling Perch: $errorMessage"
+                Stop-Deployment
             }
             #destroy the handle cache
             $null = $handle
@@ -1632,14 +1690,14 @@ function Install-Sysmon64 {
 
 # Function to configure running Sysmon64
 function Set-Sysmon64 {
-    param ()
+    param ([string]$ExePath = "$InstallDIR\sysmon\$sysmonExe")
     # Exact name: the ARM64 driver (Sysmon64a.exe) registers as service "Sysmon64a", not "Sysmon64",
     # and a wildcard would also match a stale wrong-architecture "Sysmon64" service.
     $sysmon64 = Get-Service -Name $sysmonSvcName -ErrorAction SilentlyContinue
     if ($sysmon64) {
         try {
             Write-Output  "$(Get-FormattedDate) Setting the configuration for Sysmon64."
-            $process = Start-Process -FilePath "$InstallDIR\sysmon\$sysmonExe" -ArgumentList "-c `"$InstallDIR\configs\UNS-Sysmon.xml`"" -NoNewWindow -PassThru
+            $process = Start-Process -FilePath $ExePath -ArgumentList "-c `"$InstallDIR\configs\UNS-Sysmon.xml`"" -NoNewWindow -PassThru
             $handle = $process.Handle  # Cache the process handle
             $process.WaitForExit()
 
@@ -1649,6 +1707,13 @@ function Set-Sysmon64 {
             } else {
                 Write-Output "$(Get-FormattedDate) Configuration of Sysmon64 is complete" 
                 Write-Verbose "$(Get-FormattedDate) Configuration of Sysmon64 is complete"
+                # remember which config was applied, so a later run can tell whether the downloaded one is new
+                try {
+                    (Get-FileHash -Algorithm SHA256 -LiteralPath "$InstallDIR\configs\UNS-Sysmon.xml" -ErrorAction Stop).Hash |
+                        Set-Content -Path "$InstallDIR\configs\UNS-Sysmon.applied.sha256" -ErrorAction Stop
+                } catch {
+                    Write-Verbose "$(Get-FormattedDate) Could not record the applied Sysmon config hash: $($_.Exception.Message)"
+                }
             }
         }
         catch {
@@ -1661,8 +1726,26 @@ function Set-Sysmon64 {
     } else {
         Write-Error "$(Get-FormattedDate) Sysmon64 was not found on the system" 
         Write-Verbose "$(Get-FormattedDate) Sysmon64 was not found on the system"
-        exit
+        Stop-Deployment
     }
+}
+
+# Sysmon that is already installed keeps whatever configuration it has. This applies the UNS config again
+# when the config downloaded in this run differs from the one this script last applied (or when this script
+# never applied one), using the Sysmon binary the installed service runs from so versions always match.
+function Update-Sysmon64ConfigIfChanged {
+    $config = "$InstallDIR\configs\UNS-Sysmon.xml"
+    $marker = "$InstallDIR\configs\UNS-Sysmon.applied.sha256"
+    if (-not (Test-Path -LiteralPath $config)) { Write-Output "$(Get-FormattedDate) No Sysmon config file to apply"; return }
+    $newHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $config).Hash
+    $appliedHash = if (Test-Path -LiteralPath $marker) { ((Get-Content -Path $marker -Raw -ErrorAction SilentlyContinue) + '').Trim() } else { '' }
+    if ($newHash -eq $appliedHash) {
+        Write-Verbose "$(Get-FormattedDate) Sysmon config is unchanged since it was last applied"
+        return
+    }
+    Write-Output "$(Get-FormattedDate) Sysmon is installed but the UNS config has changed (or was never applied by this script), applying it"
+    $installedExe = Join-Path $env:SystemRoot $sysmonExe
+    if (Test-Path -LiteralPath $installedExe) { Set-Sysmon64 -ExePath $installedExe } else { Set-Sysmon64 }
 }
 
 # Function to popup token form
@@ -1778,7 +1861,7 @@ function Remove-ElasticInstallFiles {
 # Runs elastic-agent uninstall with a time limit and prints its output without the progress spinner.
 # Returns the exit code, or $null when it had to be stopped for running longer than the limit.
 function Invoke-ElasticAgentUninstallProcess {
-    param ([string]$ExePath, [string]$Arguments, [int]$TimeoutMinutes = 5, [string]$Label = "elastic-agent uninstall")
+    param ([string]$ExePath, [string]$Arguments, [int]$TimeoutMinutes = 5, [string]$Label = "elastic-agent uninstall", [switch]$Quiet)
 
     $outFile = Join-Path $env:TEMP "uns-elastic-uninstall-out.txt"
     $errFile = Join-Path $env:TEMP "uns-elastic-uninstall-err.txt"
@@ -1807,11 +1890,23 @@ function Invoke-ElasticAgentUninstallProcess {
             }
         }
     }
-    Write-Output "$(Get-FormattedDate) $Label finished with exit code $(if ($null -eq $exitCode) { '<timed out>' } else { $exitCode }). Uninstaller output:"
-    Format-ElasticInstallOutput $outFile
-    if ((Test-Path $errFile) -and ((Get-Item $errFile).Length -gt 0)) {
-        Write-Output "    Uninstaller error output:"
-        Format-ElasticInstallOutput $errFile
+    # Kept for the caller (already free of tokens): it decides from the text whether another token is worth a try.
+    $script:UninstallOutputText = ((Get-Content -Path $outFile -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content -Path $errFile -Raw -ErrorAction SilentlyContinue))
+    if ($Quiet) {
+        # a retry with another token: one line instead of the whole uninstaller log
+        $reason = ''
+        if ($null -ne $exitCode -and $exitCode -ne 0) {
+            $reasonLine = ($script:UninstallOutputText -split "`r?`n" | Where-Object { $_ -match 'Invalid uninstall token|uninstall token|error' } | Select-Object -First 1)
+            if ($reasonLine) { $reason = ' - ' + ($reasonLine.Trim() -replace '\s+', ' '); if ($reason.Length -gt 170) { $reason = $reason.Substring(0, 170) + '...' } }
+        }
+        Write-Output "$(Get-FormattedDate) $Label finished with exit code $(if ($null -eq $exitCode) { '<timed out>' } else { $exitCode })$reason"
+    } else {
+        Write-Output "$(Get-FormattedDate) $Label finished with exit code $(if ($null -eq $exitCode) { '<timed out>' } else { $exitCode }). Uninstaller output:"
+        Format-ElasticInstallOutput $outFile
+        if ((Test-Path $errFile) -and ((Get-Item $errFile).Length -gt 0)) {
+            Write-Output "    Uninstaller error output:"
+            Format-ElasticInstallOutput $errFile
+        }
     }
     Remove-Item -Path $outFile, $errFile -Force -ErrorAction SilentlyContinue
     $script:UninstallExitCode = $exitCode
@@ -1822,14 +1917,27 @@ function Invoke-ElasticAgentUninstallProcess {
 # install belongs to the policy it was last enrolled in, which is not necessarily the policy this run
 # enrolls into, so its uninstall token may be any of them. A wrong token is simply refused.
 function Get-UninstallTokenCandidates {
-    $candidates = New-Object System.Collections.Generic.List[string]
+    return @(Get-UninstallTokenSources | ForEach-Object { $_.Token })
+}
+
+# The same candidates, each with where it came from (a policy name, never the token itself), so a log can
+# say which policy's token finally worked. Duplicate values are listed once, under the first source.
+function Get-UninstallTokenSources {
+    $sources = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
     $own = ($uninstallToken -join '').Trim()
-    if ($own) { $candidates.Add($own) }
+    if ($own) {
+        $sources.Add([pscustomobject]@{ Token = $own; Source = "this machine's policy ($policyName)" })
+        $seen[$own] = $true
+    }
     foreach ($roleName in 'Workstation', 'WorkstationNoDefend', 'Server', 'ServerNoDefend', 'HyperV', 'HyperVNoDefend', 'DC', 'DCNoDefend', 'Other') {
         $value = (@(Get-Variable -Name "uninstallToken$roleName" -ValueOnly -ErrorAction SilentlyContinue) -join '').Trim()
-        if ($value -and -not $candidates.Contains($value)) { $candidates.Add($value) }
+        if ($value -and -not $seen.ContainsKey($value)) {
+            $sources.Add([pscustomobject]@{ Token = $value; Source = "policy $roleName" })
+            $seen[$value] = $true
+        }
     }
-    return $candidates.ToArray()
+    return $sources.ToArray()
 }
 
 # Removes the Elastic Endpoint (Elastic Defend) with its own uninstaller:
@@ -1914,24 +2022,54 @@ function Remove-ExistingElasticAgent {
 
     if (Test-Path $existingAgentExe) {
         try {
-            $uninstallArgs = "uninstall --force"
-            $uninstallTokenText = ($uninstallToken -join '').Trim()
-            if ($uninstallTokenText) {
-                $uninstallArgs += " --uninstall-token=$uninstallTokenText"
+            # An installed agent belongs to the policy it was last enrolled in, which is not necessarily the
+            # policy this run enrolls into, and an uninstall token only fits its own policy. So: the token for
+            # this machine's policy first, then the token of every other policy that has one, then one attempt
+            # without a token (an agent without Tamper Protection needs none). Only a refusal that is about the
+            # token leads to the next attempt; any other failure stops here and the fallback below takes over.
+            $tokenSources = @(Get-UninstallTokenSources)
+            $attempts = @()
+            foreach ($source in $tokenSources) {
+                $attempts += [pscustomobject]@{ Arguments = "uninstall --force --uninstall-token=$($source.Token)"; Label = "elastic-agent uninstall (token of $($source.Source))" }
             }
+            $attempts += [pscustomobject]@{ Arguments = "uninstall --force"; Label = "elastic-agent uninstall (no token)" }
             Write-Verbose "$(Get-FormattedDate) Running supported uninstall via $existingAgentExe"
-            $script:UninstallExitCode = $null
-            Invoke-ElasticAgentUninstallProcess -ExePath $existingAgentExe -Arguments $uninstallArgs
-            if ($script:UninstallExitCode -ne 0) {
-                $exitText = if ($null -eq $script:UninstallExitCode) { 'timed out' } else { "exit code $($script:UninstallExitCode)" }
-                if (-not $uninstallTokenText) {
-                    Write-Error "$(Get-FormattedDate) elastic-agent uninstall failed ($exitText). If Agent Tamper Protection is enabled on this agent's policy, re-run with -uninstallToken <token>."
-                } else {
-                    Write-Error "$(Get-FormattedDate) elastic-agent uninstall failed ($exitText)."
+
+            $attemptNumber = 0
+            $installedPolicyShown = $false
+            $stoppedForOtherReason = $false
+            $lastExitText = ''
+            foreach ($attempt in $attempts) {
+                $attemptNumber++
+                $script:UninstallExitCode = $null
+                $script:UninstallOutputText = ''
+                # the first attempt prints the whole uninstaller log, later ones a single line each
+                Invoke-ElasticAgentUninstallProcess -ExePath $existingAgentExe -Arguments $attempt.Arguments -Label "$($attempt.Label) [attempt $attemptNumber of $($attempts.Count)]" -Quiet:($attemptNumber -gt 1)
+                if ($script:UninstallExitCode -eq 0) {
+                    Write-Output "$(Get-FormattedDate) Existing Elastic Agent/Endpoint uninstalled successfully$(if ($attemptNumber -gt 1) { " (accepted: $($attempt.Label -replace '^elastic-agent uninstall \(', '' -replace '\)$', ''))" })"
+                    $uninstalled = $true
+                    break
                 }
-            } else {
-                Write-Output "$(Get-FormattedDate) Existing Elastic Agent/Endpoint uninstalled successfully"
-                $uninstalled = $true
+                $lastExitText = if ($null -eq $script:UninstallExitCode) { 'timed out' } else { "exit code $($script:UninstallExitCode)" }
+
+                if ((-not $installedPolicyShown) -and ($script:UninstallOutputText -match "Policy \(id ([0-9a-fA-F-]+)\) '([^']+)'")) {
+                    Write-Output "$(Get-FormattedDate) The installed agent is enrolled in policy '$($Matches[2])' (id $($Matches[1])); this run enrolls into policy $policyName"
+                    $installedPolicyShown = $true
+                }
+                if (($null -eq $script:UninstallExitCode) -or ($script:UninstallOutputText -notmatch 'uninstall token|tamper')) {
+                    Write-Output "$(Get-FormattedDate) The uninstall failed for a reason other than the token, not trying other tokens"
+                    $stoppedForOtherReason = $true
+                    break
+                }
+            }
+            if (-not $uninstalled) {
+                if ($tokenSources.Count -eq 0) {
+                    Write-Output "$(Get-FormattedDate) WARNING: elastic-agent uninstall failed ($lastExitText). If Agent Tamper Protection is enabled on this agent's policy, set the uninstall token ($(Get-EnvSettingName 'uninstallToken') or $(Get-EnvSettingName "uninstallToken$policyName"))."
+                } elseif ($stoppedForOtherReason) {
+                    Write-Output "$(Get-FormattedDate) WARNING: elastic-agent uninstall failed ($lastExitText) and the failure is not about the uninstall token; using the fallback removal."
+                } else {
+                    Write-Output "$(Get-FormattedDate) WARNING: elastic-agent uninstall failed ($lastExitText) after $attemptNumber attempt(s), none of the $($tokenSources.Count) known uninstall token(s) was accepted; using the fallback removal."
+                }
             }
         }
         catch {
@@ -2358,7 +2496,7 @@ function Install-ElasticAgent {
             # additional check if token was provided and value is not null
             if ($null -eq $token) {
                 Write-Error "$(Get-FormattedDate) Token issues after token forms"
-                exit
+                Stop-Deployment
 
             } else {
                 # installing elastic services
@@ -2407,7 +2545,7 @@ function Install-ElasticAgent {
                         catch {
                             $errorMessage = $_.Exception.Message
                             Write-Error $errorMessage -ErrorAction Stop
-                            exit
+                            Stop-Deployment
                         }
 
                         Write-Verbose "$(Get-FormattedDate) Elastic agent service stopped."
@@ -2434,7 +2572,7 @@ function Install-ElasticAgent {
                         catch {
                             $errorMessage = $_.Exception.Message
                             Write-Error "$(Get-FormattedDate) Installation failed because of $($errorMessage)" -ErrorAction Stop
-                            exit
+                            Stop-Deployment
                         }
 
                         Write-Verbose "$(Get-FormattedDate) Elastic agent service renamed to UNS SIEM Agent"
@@ -2462,47 +2600,33 @@ function Install-ElasticAgent {
                             Write-Verbose "$(Get-FormattedDate) Service started successfully"
                         }
 
-                        # The new agent is up. If the OLD Endpoint survived cleanup before this
-                        # install (Remove-ExistingElasticAgent set this instead of aborting),
-                        # retry removing it now: the fresh enrollment gives Fleet/Endpoint a
-                        # non-orphaned uninstall-token context, which is what makes removal
-                        # succeed where the pre-install attempt did not - this automates the
-                        # manual recovery sequence (force-install, wait for policy, uninstall
-                        # Endpoint then Agent, leave the machine empty for the next scheduled
-                        # run) rather than aborting before the agent is ever installed. Only
-                        # attempted when the new agent itself is confirmed healthy.
-                        #
-                        # This -InstallOnly deployment process never runs the parent evaluation
-                        # process's "if (-not $InstallOnly)" block, so Set-SiemNeedsReview,
-                        # Invoke-SiemEvaluation and the status-marker variables (all defined
-                        # inside that block) are not available here - but Clear-ElasticEnvSettings
-                        # and Write-SiemDiagnostics are defined at top level and work in both.
-                        # Regardless, the parent's normal post-deploy recheck would see "not
-                        # installed" after a successful self-heal and wrongly report
-                        # NEEDS_REVIEW, so the outcome is signalled back via a distinct exit code
-                        # instead (3 = self-healed, machine intentionally empty; 4 = new agent
-                        # fine but the old remnant still would not go away) - same pattern the
-                        # parent already uses for -UninstallOnly (checks $childExitCode directly
-                        # instead of recomputing compliance). The parent's exit-code handling has
-                        # a matching update.
+                        # An Endpoint that survived the cleanup before this install (tamper protection) is still there.
+                        # What to do with it depends on the policy this machine just enrolled in:
+                        #  * A policy with Elastic Defend (anything not ...NoDefend): the new agent takes over the
+                        #    existing Endpoint (same service) and reconfigures it. The old and the new Endpoint cannot
+                        #    be told apart by name, so removing it now could remove the protection that was just
+                        #    deployed. It is left in place and only reported.
+                        #  * A ...NoDefend policy: no Endpoint is wanted, so the survivor is a stray. It is removed with
+                        #    its own uninstaller once the agent has enrolled; the new agent stays.
+                        # This -InstallOnly process cannot call Set-SiemNeedsReview (it lives in the evaluation process),
+                        # so a failure is signalled with exit code 4, which the evaluation process reads.
                         if ($script:AgentInstallOk -and $script:OldEndpointSurvivedCleanup) {
-                            Write-Output "$(Get-FormattedDate) Old Endpoint survived cleanup before this install; new agent is enrolled and running - waiting 60s for its policy, then retrying removal"
-                            Start-Sleep -Seconds 60
+                            if ($policyName -match 'NoDefend$') {
+                                Write-Output "$(Get-FormattedDate) An Endpoint from the previous install survived the cleanup and policy $policyName does not use Elastic Defend; the new agent is enrolled and running - waiting 60s for its policy, then removing the stray Endpoint"
+                                Start-Sleep -Seconds 60
+                                $null = Invoke-ElasticEndpointUninstall
 
-                            # Only the old Endpoint is removed here, with its own uninstaller. The Elastic
-                            # Agent that was just installed and enrolled must stay: running
-                            # "elastic-agent uninstall" now would remove the new agent and leave the old
-                            # Endpoint behind.
-                            $null = Invoke-ElasticEndpointUninstall
-
-                            $recoveryState = Wait-ElasticServicesGone
-                            if (-not $recoveryState.EndpointPresent) {
-                                Write-Output "$(Get-FormattedDate) Recovery succeeded: old Endpoint is removed and the new Elastic Agent is installed and running."
+                                $recoveryState = Wait-ElasticServicesGone
+                                if (-not $recoveryState.EndpointPresent) {
+                                    Write-Output "$(Get-FormattedDate) Stray Endpoint removed; the new Elastic Agent is installed and running."
+                                } else {
+                                    Write-Output "$(Get-FormattedDate) Stray Endpoint could NOT be removed (Elastic Agent present: $($recoveryState.AgentPresent), ElasticEndpoint present: $($recoveryState.EndpointPresent)). Manual review required."
+                                    Write-SiemDiagnostics
+                                    Clear-ElasticEnvSettings
+                                    Stop-Deployment -Code 4
+                                }
                             } else {
-                                Write-Output "$(Get-FormattedDate) Recovery FAILED: Elastic Agent present: $($recoveryState.AgentPresent), ElasticEndpoint present: $($recoveryState.EndpointPresent), even after a fresh install and retry. Manual review required."
-                                Write-SiemDiagnostics
-                                Clear-ElasticEnvSettings
-                                exit 4
+                                Write-Output "$(Get-FormattedDate) An Endpoint from the previous install is still present. Policy $policyName includes Elastic Defend, so it is NOT removed: the new agent takes over the existing Endpoint. Check in Fleet that the Endpoint reports healthy for this host."
                             }
                         }
 
@@ -2511,7 +2635,7 @@ function Install-ElasticAgent {
                         $errorMessage = $_.Exception.Message
                         Write-Error "$(Get-FormattedDate) Modifying services failed because of $($errorMessage)" -ErrorAction Stop
                         Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
-                        exit
+                        Stop-Deployment
                     }
                 }
             }
@@ -2520,7 +2644,7 @@ function Install-ElasticAgent {
                 $errorMessage = $_.Exception.Message
                 Write-Error "$(Get-FormattedDate) UNS ElasticSIEM Agent deployment failed for following reason: $($errorMessage)" -ErrorAction Stop
                 Remove-Item -Path $InstallDIR\agent -Recurse -Force -ErrorAction SilentlyContinue
-                exit
+                Stop-Deployment
         }
 }
 
@@ -2561,6 +2685,7 @@ try {
             Start-Sleep -Seconds 1
         } elseif ($nativeSysmon) {
             Write-Verbose "$(Get-FormattedDate) $sysmonSvcName already installed."
+            Update-Sysmon64ConfigIfChanged
         } else {
             Write-Verbose "$(Get-FormattedDate) $sysmonSvcName not installed on the system. Installing..."
             Install-Sysmon64
