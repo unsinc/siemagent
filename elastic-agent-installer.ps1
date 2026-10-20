@@ -21,7 +21,7 @@ File Name       : elastic-agent-installer.ps1
 Author          : nkolev@unsinc.com
 Prerequisite    : PowerShell >= V4,V5
 Copyright       : 2024, UNS Inc
-Version         : 2026.10.07.14
+Version         : 2026.10.07.15
 
 .EXAMPLE
 You can smply load the script and let it do it's magic.
@@ -127,8 +127,9 @@ param
 # Script version: increase the last number by one (2026.10.07.12, ...; a new day starts with the date and .1) EVERY time this script is changed, and add a line
 # to the change log below. It is printed first in the output, so the log of a run shows which copy of
 # the script (e.g. the one stored in NinjaOne) actually ran.
-$ScriptVersion = "2026.10.07.14"
+$ScriptVersion = "2026.10.07.15"
 # Change log:
+#   2026.10.07.15  The role evidence in the log also shows the AD DS (NTDS) service state; the role itself is decided as before.
 #   2026.10.07.14  Failure exits reach the evaluation process as non-zero (Stop-Deployment; exit 4 used to become 0); the old-Endpoint
 #                  cleanup after install only removes a stray Endpoint under a ...NoDefend policy and never an Endpoint a Defend policy
 #                  takes over; dead exit-3 branch removed; downloads have time limits and reject empty files; Perch exit codes 3010/1641/1605
@@ -145,7 +146,7 @@ Write-Output "UNS SIEM Agent installer script version $ScriptVersion"
 ######## Evaluation / deployment settings ##########
 # Offline fallback for the required agent version. The real source is agent-version on GitHub; this
 # is only used when GitHub can't be reached.
-$defaultVersion = [version]"9.5.4"
+$defaultVersion = [version]"9.5.5"
 
 # Seconds to wait between the end of the deployment and the confirmation check.
 $recheckDelaySeconds = 15
@@ -838,7 +839,15 @@ function get_windows_role_type {
     if (($null -ne $isServer) -and ($null -ne $info.DomainRole) -and ($isServer -ne $serverByRole)) {
         $note = " - DomainRole disagrees with the OS, trusting the OS"
     }
-    $script:roleEvidence = "ProductType=$($info.ProductType), InstallationType=$($info.InstallationType), DomainRole=$($info.DomainRole), OS='$($info.Caption)'$note"
+    # The AD DS service (NTDS) is only present on a domain controller. It is not used to decide the role; it is
+    # shown so a log answers "is this really a DC?" without a second visit. A running NTDS that Windows does not
+    # report as a domain controller is called out because it should never happen.
+    $ntdsService = Get-Service -Name 'NTDS' -ErrorAction SilentlyContinue
+    $ntdsText = if ($ntdsService) { "NTDS=$($ntdsService.Status)" } else { 'NTDS=not present' }
+    if (($type -ne 'DomainController') -and $ntdsService -and ($ntdsService.Status -eq 'Running')) {
+        $note += " - WARNING: the AD DS service is running but Windows does not report a domain controller"
+    }
+    $script:roleEvidence = "ProductType=$($info.ProductType), InstallationType=$($info.InstallationType), DomainRole=$($info.DomainRole), $ntdsText, OS='$($info.Caption)'$note"
     $script:roleType = $type
     return $type
 }
